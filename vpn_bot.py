@@ -1,8 +1,6 @@
 import asyncio
 import os
 import time
-from urllib.parse import quote
-
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
@@ -42,6 +40,12 @@ def is_active_status(status: str) -> bool:
     return status in {"wait_receipt", "pending_admin"}
 
 # ====== КЛАВИАТУРЫ ======
+def kb_after_key() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔒 Вступить в приватную группу (обязательно)", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+    ])
+
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟩 Стандарт — 200₽", callback_data="plan:standard")],
@@ -66,19 +70,6 @@ def kb_admin(order_id: int, plan: str, user_id: int) -> InlineKeyboardMarkup:
         ]
     ])
 
-def kb_after_key_with_connect(subscription: str) -> InlineKeyboardMarkup:
-    # как на твоём скрине:
-    # https://vleska.xyz/?url=happ://add/https://sub....
-    # Telegram охотнее открывает https, поэтому оборачиваем deep-link через vleska.xyz
-    deeplink = "happ://add/" + subscription
-    connect_url = "https://vleska.xyz/?url=" + quote(deeplink, safe=":/?=&%")
-
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Подключиться (Happ)", url=connect_url)],
-        [InlineKeyboardButton(text="🔒 Вступить в приватную группу (обязательно)", url=PRIVATE_GROUP_LINK)],
-        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
-    ])
-
 # ====== КЛЮЧИ ИЗ TXT (НЕ УДАЛЯЕМ) ======
 def take_key(plan: str) -> str | None:
     filename = "standard_keys.txt" if plan == "standard" else "family_keys.txt"
@@ -91,7 +82,7 @@ def take_key(plan: str) -> str | None:
     if not lines:
         return None
 
-    # ✅ не удаляем, всегда выдаём первый ключ/подписку
+    # ✅ не удаляем, всегда выдаём первый ключ
     return lines[0]
 
 # ====== БОТ ======
@@ -107,7 +98,7 @@ async def start(m: Message):
     await m.answer(
         "⚡ *Sokxyy Обход — VPN навсегда*\n\n"
         "✅ *Обе подписки:* обходят белые списки, глушилки\n"
-        "🔑 После покупки выдаётся ключ/подписка для *Happ* клиента\n\n"
+        "🔑 После покупки выдаётся ключ для *Happ* клиента\n\n"
         "Выбери подписку 👇",
         reply_markup=kb_main()
     )
@@ -166,7 +157,7 @@ async def plan_info(call: CallbackQuery):
             "👤 1 пользователь\n"
             "📱 до 3 устройств\n\n"
             "✅ Обходит белые списки и глушилки\n"
-            "🔑 После оплаты выдаётся подписка/ключ для Happ\n\n"
+            "🔑 Ключ для Happ после подтверждения оплаты\n\n"
             "📣 Канал: https://t.me/sokxyybc"
         )
     else:
@@ -175,7 +166,7 @@ async def plan_info(call: CallbackQuery):
             "👥 до 8 пользователей\n"
             "📱 у каждого до 3 устройств\n\n"
             "✅ Обходит белые списки и глушилки\n"
-            "🔑 После оплаты выдаётся подписка/ключ для Happ\n\n"
+            "🔑 Ключ для Happ после подтверждения оплаты\n\n"
             "📣 Канал: https://t.me/sokxyybc"
         )
 
@@ -292,26 +283,21 @@ async def admin_decide(call: CallbackQuery):
         key = take_key(plan)
         if not key:
             await call.answer("Ключи не найдены", show_alert=True)
-            await bot.send_message(
-                ADMIN_ID,
-                "⚠️ В файле ключей нет строк.\nДобавь ключи в `standard_keys.txt` / `family_keys.txt` (первая строка используется)."
-            )
+            await bot.send_message(ADMIN_ID, "⚠️ В файле ключей нет строк. Добавь ключи в standard_keys.txt / family_keys.txt")
             return
 
         orders[oid]["status"] = "accepted"
         active_order_by_user.pop(user_id, None)
 
-        subscription = key  # ключ/подписка для Happ
-
         await bot.send_message(
             user_id,
-            "✅ *Оплата подтверждена!*\n\n"
-            "🔑 Твоя подписка:\n"
-            f"`{subscription}`\n\n"
-            "Нажми кнопку ниже — откроется *Happ* и подписка добавится автоматически.\n\n"
+            "✅ *Оплата подтверждена!*\n"
+            "Твой ключ:\n"
+            f"`{key}`\n\n"
+            "📌 *Happ:* Add/Import → вставь ключ → Connect\n\n"
             "🔒 *Обязательно:* вступи в приватную группу — без неё обслуживания нет.\n"
             "⭐ Буду благодарен за отзыв.",
-            reply_markup=kb_after_key_with_connect(subscription)
+            reply_markup=kb_after_key()
         )
 
         await call.message.edit_text(call.message.text + "\n\n✅ Принято. Ключ выдан.")
