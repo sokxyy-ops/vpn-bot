@@ -71,6 +71,15 @@ def take_key(plan: str) -> str | None:
     if not lines:
         return None
 
+    # НЕ удаляем ключ, просто выдаём первый
+    return lines[0]
+
+    with open(filename, "r", encoding="utf-8") as f:
+        lines = [x.strip() for x in f.read().splitlines() if x.strip()]
+
+    if not lines:
+        return None
+
     key = lines[0]
 
     # удаляем выданный ключ
@@ -335,3 +344,4 @@ async def main():
 if __name__ == "__main__":
 
     asyncio.run(main())
+
