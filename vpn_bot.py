@@ -44,12 +44,23 @@ def kb_after_key() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔒 Вступить в приватную группу (обязательно)", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+        [InlineKeyboardButton(text="🛠 Поддержка", url=f"https://t.me/{ADMIN_USERNAME}")],
+    ])
+
+def kb_reviews() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="👀 Смотреть отзывы", url=REVIEW_LINK)],
+        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="back")],
     ])
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟩 Стандарт — 200₽", callback_data="plan:standard")],
         [InlineKeyboardButton(text="🟦 Семейная — 300₽", callback_data="plan:family")],
+        [InlineKeyboardButton(text="📝 Отзывы", callback_data="reviews")],
+        # ✅ ВАРИАНТ 2: поддержка сразу открывает админа (без панели)
+        [InlineKeyboardButton(text="🛠 Поддержка", url=f"https://t.me/{ADMIN_USERNAME}")],
         [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="cancel")],
         [InlineKeyboardButton(text="📣 TG канал", url=TG_CHANNEL)],
     ])
@@ -58,7 +69,8 @@ def kb_plan(plan: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 Получить реквизиты", callback_data=f"pay:{plan}")],
         [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="cancel")],
-        [InlineKeyboardButton(text="✉️ Написать админу", url=f"https://t.me/{ADMIN_USERNAME}")],
+        [InlineKeyboardButton(text="🛠 Поддержка", url=f"https://t.me/{ADMIN_USERNAME}")],
+        [InlineKeyboardButton(text="📝 Отзывы", callback_data="reviews")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
     ])
 
@@ -144,6 +156,17 @@ async def cancel_cmd(m: Message):
 @dp.callback_query(F.data == "back")
 async def back(call: CallbackQuery):
     await start(call.message)
+    await call.answer()
+
+# ====== отзывы (панелька) ======
+@dp.callback_query(F.data == "reviews")
+async def reviews_panel(call: CallbackQuery):
+    await call.message.answer(
+        "⭐ *Отзывы клиентов*\n\n"
+        "Нажми кнопку ниже — откроется пост с отзывами в канале.\n"
+        "Можешь посмотреть и оставить свой 👇",
+        reply_markup=kb_reviews()
+    )
     await call.answer()
 
 # ====== тарифы ======
@@ -283,7 +306,10 @@ async def admin_decide(call: CallbackQuery):
         key = take_key(plan)
         if not key:
             await call.answer("Ключи не найдены", show_alert=True)
-            await bot.send_message(ADMIN_ID, "⚠️ В файле ключей нет строк. Добавь ключи в standard_keys.txt / family_keys.txt")
+            await bot.send_message(
+                ADMIN_ID,
+                "⚠️ В файле ключей нет строк. Добавь ключи в standard_keys.txt / family_keys.txt"
+            )
             return
 
         orders[oid]["status"] = "accepted"
