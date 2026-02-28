@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 
 # ====== НАСТРОЙКИ ======
-BOT_TOKEN = "PASTE_YOUR_TOKEN_HERE"   # <-- вставь токен
+BOT_TOKEN = "8784531541:AAEjCWyYFoojS73ysU5Y3_qvx3BSvs4gmGI"   # <-- вставь токен
 ADMIN_ID = 8432011115                 # <-- твой ID
 TG_CHANNEL = "https://t.me/sokxyybc"
 ADMIN_USERNAME = "whyshawello"        # без @
@@ -333,4 +333,5 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+
     asyncio.run(main())
