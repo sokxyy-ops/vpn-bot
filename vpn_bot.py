@@ -15,6 +15,26 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # ID приватной группы (chat_id вида -100xxxxxxxxxx)
 PRIVATE_GROUP_ID = int(os.getenv("PRIVATE_GROUP_ID", "0"))
+from aiogram.types import ChatMemberUpdated
+
+@dp.my_chat_member()
+async def on_my_chat_member(update: ChatMemberUpdated):
+    # когда бота добавили/удалили/повысили — Telegram шлёт апдейт с chat.id
+    new_status = update.new_chat_member.status
+    chat = update.chat
+
+    # интересует момент, когда бот стал участником/админом
+    if new_status in ("member", "administrator"):
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                "✅ Бота добавили в чат!\n"
+                f"Название: *{chat.title or 'без названия'}*\n"
+                f"Тип: `{chat.type}`\n"
+                f"CHAT_ID: `{chat.id}`"
+            )
+        except Exception:
+            pass
 
 # ====== LINKS / SETTINGS ======
 TG_CHANNEL = "https://t.me/sokxyybc"
@@ -450,3 +470,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
