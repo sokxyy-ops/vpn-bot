@@ -6,11 +6,16 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
 
-# ====== НАСТРОЙКИ ======
-BOT_TOKEN = "8784531541:AAEjCWyYFoojS73ysU5Y3_qvx3BSvs4gmGI"   # <-- вставь токен
-ADMIN_ID = 8432011115                 # <-- твой ID
+# ====== ENV (Railway Variables) ======
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# ====== LINKS / SETTINGS ======
 TG_CHANNEL = "https://t.me/sokxyybc"
-ADMIN_USERNAME = "whyshawello"        # без @
+ADMIN_USERNAME = "whyshawello"  # без @
+
+PRIVATE_GROUP_LINK = "https://t.me/+T7CkE9me-ohkYWNi"
+REVIEW_LINK = "https://t.me/sokxyybc/23"
 
 PAYMENT_TEXT = (
     "💳 *Реквизиты для оплаты*\n\n"
@@ -22,19 +27,25 @@ PAYMENT_TEXT = (
     "Админ подтвердит — бот выдаст ключ."
 )
 
-# ====== ЗАКАЗЫ ======
+# ====== ЗАКАЗЫ (в памяти) ======
 orders = {}
 order_seq = 1000
 
 # Антиспам: 1 активный заказ + кулдаун
 USER_COOLDOWN_SEC = 60
 last_order_time = {}        # user_id -> unix time
-active_order_by_user = {}   # user_id -> order_id (если активен)
+active_order_by_user = {}   # user_id -> order_id
 
 def is_active_status(status: str) -> bool:
     return status in {"wait_receipt", "pending_admin"}
 
 # ====== КЛАВИАТУРЫ ======
+def kb_after_key() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔒 Вступить в приватную группу (обязательно)", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+    ])
+
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟩 Стандарт — 200₽", callback_data="plan:standard")],
@@ -59,7 +70,7 @@ def kb_admin(order_id: int, plan: str, user_id: int) -> InlineKeyboardMarkup:
         ]
     ])
 
-# ====== КЛЮЧИ ИЗ TXT ======
+# ====== КЛЮЧИ ИЗ TXT (НЕ УДАЛЯЕМ) ======
 def take_key(plan: str) -> str | None:
     filename = "standard_keys.txt" if plan == "standard" else "family_keys.txt"
     if not os.path.exists(filename):
@@ -71,23 +82,8 @@ def take_key(plan: str) -> str | None:
     if not lines:
         return None
 
-    # НЕ удаляем ключ, просто выдаём первый
+    # ✅ не удаляем, всегда выдаём первый ключ
     return lines[0]
-
-    with open(filename, "r", encoding="utf-8") as f:
-        lines = [x.strip() for x in f.read().splitlines() if x.strip()]
-
-    if not lines:
-        return None
-
-    key = lines[0]
-
-    # удаляем выданный ключ
-    with open(filename, "w", encoding="utf-8") as f:
-        rest = lines[1:]
-        f.write("\n".join(rest) + ("\n" if rest else ""))
-
-    return key
 
 # ====== БОТ ======
 bot = Bot(
@@ -96,7 +92,7 @@ bot = Bot(
 )
 dp = Dispatcher()
 
-# ====== /start и /myid ======
+# ====== /start /myid ======
 @dp.message(CommandStart())
 async def start(m: Message):
     await m.answer(
@@ -111,18 +107,14 @@ async def start(m: Message):
 async def myid(m: Message):
     await m.answer(f"Твой ID: `{m.from_user.id}`")
 
-# ====== отмена (кнопка + /cancel) ======
+# ====== отмена заказа (кнопка + /cancel) ======
 async def cancel_for_user(user_id: int, notify_admin: bool = True) -> str:
-    """
-    Возвращает текст результата отмены.
-    """
     oid = active_order_by_user.get(user_id)
     if not oid or oid not in orders:
         return "У тебя нет активного заказа."
 
     st = orders[oid].get("status")
     if not is_active_status(st):
-        # если статус уже не активный — просто чистим
         active_order_by_user.pop(user_id, None)
         return "Активный заказ уже завершён."
 
@@ -131,11 +123,7 @@ async def cancel_for_user(user_id: int, notify_admin: bool = True) -> str:
 
     if notify_admin:
         try:
-            await bot.send_message(
-                ADMIN_ID,
-                f"ℹ️ Пользователь `{user_id}` отменил заказ *#{oid}*.\n"
-                f"Статус был: *{st}*"
-            )
+            await bot.send_message(ADMIN_ID, f"ℹ️ Пользователь `{user_id}` отменил заказ *#{oid}* (было: *{st}*).")
         except Exception:
             pass
 
@@ -158,7 +146,7 @@ async def back(call: CallbackQuery):
     await start(call.message)
     await call.answer()
 
-# ====== показ тарифов ======
+# ====== тарифы ======
 @dp.callback_query(F.data.startswith("plan:"))
 async def plan_info(call: CallbackQuery):
     plan = call.data.split(":")[1]
@@ -194,7 +182,7 @@ async def pay(call: CallbackQuery):
     plan = call.data.split(":")[1]
     amount = 200 if plan == "standard" else 300
 
-    # 1) если есть активный заказ — не создаём новый
+    # 1) если уже есть активный заказ — не создаём новый
     existing_id = active_order_by_user.get(user_id)
     if existing_id and existing_id in orders and is_active_status(orders[existing_id]["status"]):
         st = orders[existing_id]["status"]
@@ -220,18 +208,13 @@ async def pay(call: CallbackQuery):
     last = last_order_time.get(user_id, 0)
     left = USER_COOLDOWN_SEC - (now - last)
     if left > 0:
-        await call.message.answer(f"⛔ Не спеши 🙂 Подожди *{left} сек* и попробуй снова.")
+        await call.message.answer(f"⛔ Подожди *{left} сек* и попробуй снова.")
         await call.answer()
         return
 
     # 3) создаём заказ
     order_seq += 1
-    orders[order_seq] = {
-        "user_id": user_id,
-        "plan": plan,
-        "amount": amount,
-        "status": "wait_receipt"
-    }
+    orders[order_seq] = {"user_id": user_id, "plan": plan, "amount": amount, "status": "wait_receipt"}
     active_order_by_user[user_id] = order_seq
     last_order_time[user_id] = now
 
@@ -261,7 +244,6 @@ async def receipt(m: Message):
         await m.answer("⏳ Твой чек уже отправлен админу. Дождись подтверждения.")
         return
 
-    # переводим в pending_admin
     orders[oid]["status"] = "pending_admin"
     plan = orders[oid]["plan"]
     amount = orders[oid]["amount"]
@@ -275,7 +257,6 @@ async def receipt(m: Message):
         "Принять оплату?",
         reply_markup=kb_admin(oid, plan, m.from_user.id)
     )
-
     try:
         await m.forward(ADMIN_ID)
     except Exception:
@@ -294,20 +275,15 @@ async def admin_decide(call: CallbackQuery):
     oid = int(oid)
     user_id = int(user_id)
 
-    # если заказ отменён/уже обработан — не даём выдать ключ
-    if oid not in orders:
-        await call.answer("Заказ не найден", show_alert=True)
-        return
-
-    if orders[oid]["status"] != "pending_admin":
+    if oid not in orders or orders[oid]["status"] != "pending_admin":
         await call.answer("Заказ уже обработан/отменён", show_alert=True)
         return
 
     if act == "ok":
         key = take_key(plan)
         if not key:
-            await call.answer("Ключи закончились", show_alert=True)
-            await bot.send_message(ADMIN_ID, "⚠️ Ключи закончились. Добавь новые в standard_keys.txt / family_keys.txt")
+            await call.answer("Ключи не найдены", show_alert=True)
+            await bot.send_message(ADMIN_ID, "⚠️ В файле ключей нет строк. Добавь ключи в standard_keys.txt / family_keys.txt")
             return
 
         orders[oid]["status"] = "accepted"
@@ -318,7 +294,10 @@ async def admin_decide(call: CallbackQuery):
             "✅ *Оплата подтверждена!*\n"
             "Твой ключ:\n"
             f"`{key}`\n\n"
-            "📌 *Happ:* Add/Import → вставь ключ → Connect"
+            "📌 *Happ:* Add/Import → вставь ключ → Connect\n\n"
+            "🔒 *Обязательно:* вступи в приватную группу — без неё обслуживания нет.\n"
+            "⭐ Буду благодарен за отзыв.",
+            reply_markup=kb_after_key()
         )
 
         await call.message.edit_text(call.message.text + "\n\n✅ Принято. Ключ выдан.")
@@ -339,9 +318,11 @@ async def admin_decide(call: CallbackQuery):
 
 # ====== запуск ======
 async def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set (Railway Variables -> BOT_TOKEN)")
+    if ADMIN_ID == 0:
+        raise RuntimeError("ADMIN_ID is not set (Railway Variables -> ADMIN_ID)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-
     asyncio.run(main())
-
