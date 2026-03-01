@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 # ====== ENV (Railway Variables) ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,6 +19,10 @@ ADMIN_USERNAME = "whyshawello"  # без @
 
 PRIVATE_GROUP_LINK = "https://t.me/+T7CkE9me-ohkYWNi"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
+
+# ⚠️ Поставь реальные ссылки на Happ, если они другие
+HAPP_ANDROID_URL = os.getenv("HAPP_ANDROID_URL", "https://play.google.com/store")
+HAPP_IOS_URL = os.getenv("HAPP_IOS_URL", "https://apps.apple.com/")
 
 PAYMENT_TEXT = (
     "💳 *Реквизиты для оплаты*\n\n"
@@ -31,9 +36,9 @@ PAYMENT_TEXT = (
 
 # ====== Anti-spam ======
 USER_COOLDOWN_SEC = 60
-last_order_time = {}  # user_id -> unix time
+last_order_time = {}  # user_id -> unix time (RAM ok)
 
-# ====== SQLite ======
+# ====== SQLite (orders) ======
 DB_PATH = "orders.sqlite"
 
 def db():
@@ -56,7 +61,7 @@ def db_init():
             created_at INTEGER NOT NULL
         )
     """)
-    # миграции (добавим колонки, если их не было в прошлых версиях)
+    # миграции на случай старых версий
     if not _col_exists(cur, "orders", "issued_key"):
         cur.execute("ALTER TABLE orders ADD COLUMN issued_key TEXT")
     if not _col_exists(cur, "orders", "updated_at"):
@@ -137,9 +142,7 @@ def take_key(plan: str) -> str | None:
         return None
     with open(filename, "r", encoding="utf-8") as f:
         lines = [x.strip() for x in f.read().splitlines() if x.strip()]
-    if not lines:
-        return None
-    return lines[0]
+    return lines[0] if lines else None
 
 # ====== Keyboards ======
 def kb_main() -> InlineKeyboardMarkup:
@@ -169,11 +172,12 @@ def kb_admin(order_id: int, plan: str, user_id: int) -> InlineKeyboardMarkup:
         ]
     ])
 
-def kb_after_key(subscription: str) -> InlineKeyboardMarkup:
-    connect_url = f"happ://add/{subscription}"
+def kb_after_key() -> InlineKeyboardMarkup:
+    # Только https-кнопки, чтобы Telegram не ругался
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Подключиться (Happ)", url=connect_url)],
-        [InlineKeyboardButton(text="🔒 Вступить в приватную группу (обязательно)", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="📱 Скачать Happ (Android)", url=HAPP_ANDROID_URL)],
+        [InlineKeyboardButton(text="🍎 Скачать Happ (iOS)", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
     ])
 
@@ -187,7 +191,7 @@ async def start_cmd(m: Message):
     await m.answer(
         "⚡ *Sokxyy Обход — VPN навсегда*\n\n"
         "✅ *Обе подписки:* обходят белые списки, глушилки\n"
-        "🔑 После покупки выдаётся подписка/ключ для *Happ*\n\n"
+        "🔑 После покупки выдаётся ключ для *Happ*\n\n"
         "Выбери подписку 👇",
         reply_markup=kb_main()
     )
@@ -233,7 +237,7 @@ async def plan_info(call: CallbackQuery):
             "👤 1 пользователь\n"
             "📱 до 3 устройств\n\n"
             "✅ Обходит белые списки и глушилки\n"
-            "🔑 Подписка для Happ после оплаты\n"
+            "🔑 Ключ для Happ после оплаты\n"
         )
     else:
         text = (
@@ -241,7 +245,7 @@ async def plan_info(call: CallbackQuery):
             "👥 до 8 пользователей\n"
             "📱 у каждого до 3 устройств\n\n"
             "✅ Обходит белые списки и глушилки\n"
-            "🔑 Подписка для Happ после оплаты\n"
+            "🔑 Ключ для Happ после оплаты\n"
         )
     await call.message.answer(text + f"\n📣 Канал: {TG_CHANNEL}", reply_markup=kb_plan(plan))
     await call.answer()
@@ -284,7 +288,7 @@ async def pay(call: CallbackQuery):
     )
     await call.answer()
 
-# ====== Receipt (admin receives always) ======
+# ====== Receipt ======
 @dp.message(F.content_type.in_({"photo", "document", "text"}))
 async def receipt(m: Message):
     user_id = m.from_user.id
@@ -296,18 +300,14 @@ async def receipt(m: Message):
 
     if active:
         db_set_status(active["order_id"], "pending_admin")
-        order_id = active["order_id"]
-        plan = active["plan"]
-        amount = active["amount"]
-
         await bot.send_message(
             ADMIN_ID,
             "🔔 *Чек на проверку*\n"
-            f"Заказ: *#{order_id}*\n"
+            f"Заказ: *#{active['order_id']}*\n"
             f"Пользователь: `{user_id}` (@{m.from_user.username or '—'})\n"
-            f"Сумма: *{amount}₽*\n\n"
+            f"Сумма: *{active['amount']}₽*\n\n"
             "Принять оплату?",
-            reply_markup=kb_admin(order_id, plan, user_id)
+            reply_markup=kb_admin(active["order_id"], active["plan"], user_id)
         )
     else:
         await bot.send_message(
@@ -319,27 +319,30 @@ async def receipt(m: Message):
 
     try:
         await m.copy_to(ADMIN_ID)
-    except Exception as e:
-        try:
-            await bot.send_message(ADMIN_ID, f"⚠️ Не смог скопировать чек: `{type(e).__name__}`")
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     await m.answer("✅ Чек отправлен админу. Жди подтверждения.")
 
-# ====== Helper: send key to user safely ======
+# ====== Send key (no happ:// button, only text) ======
 async def send_key_to_user(user_id: int, key: str):
     await bot.send_message(
         user_id,
         "✅ *Оплата подтверждена!*\n\n"
-        "🔑 Твоя подписка:\n"
+        "🔑 *Твой ключ:*\n"
         f"`{key}`\n\n"
-        "Нажми кнопку ниже — откроется *Happ* и подписка добавится.\n\n"
+        "📲 *Как подключиться (Happ):*\n"
+        "1) Скачай приложение Happ\n"
+        "2) Открой Happ\n"
+        "3) Нажми «Добавить / Import / Подписка»\n"
+        "4) Вставь туда *ключ* (который выше)\n\n"
+        "🌍 После добавления появятся сервера — выбирай любой и подключайся.\n\n"
+        "🔒 Без вступления в приватную группу обслуживания нет.\n"
         "⭐ Буду благодарен за отзыв.",
-        reply_markup=kb_after_key(key)
+        reply_markup=kb_after_key()
     )
 
-# ====== Admin decision (fixed: accepted only after successful send) ======
+# ====== Admin ======
 @dp.callback_query(F.data.startswith("admin:"))
 async def admin_decide(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
@@ -353,7 +356,7 @@ async def admin_decide(call: CallbackQuery):
 
     action = parts[1]
 
-    # -------- resend ----------
+    # resend
     if action == "resend":
         try:
             order_id = int(parts[2])
@@ -374,22 +377,26 @@ async def admin_decide(call: CallbackQuery):
             await send_key_to_user(order["user_id"], order["issued_key"])
             db_set_status(order_id, "accepted")
             await call.answer("Отправлено ✅")
-            try:
-                await call.message.edit_text(call.message.text + "\n\n♻️ Повторная отправка: ✅ успешно.")
-            except Exception:
-                pass
-        except Exception as e:
+        except TelegramForbiddenError:
             db_set_status(order_id, "send_failed")
-            await call.answer("Не отправилось", show_alert=True)
+            await call.answer("Пользователь недоступен", show_alert=True)
             await bot.send_message(
                 ADMIN_ID,
                 f"⚠️ Не смог отправить пользователю `{order['user_id']}`.\n"
-                f"Причина: `{type(e).__name__}`\n"
-                "Обычно юзер не нажимал /start или заблокировал бота."
+                "Причина: пользователь мог заблокировать бота.\n"
+                "Пусть снова напишет боту /start."
             )
+        except TelegramBadRequest as e:
+            db_set_status(order_id, "send_failed")
+            await call.answer("Ошибка Telegram", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ TelegramBadRequest при resend: `{e}`")
+        except Exception as e:
+            db_set_status(order_id, "send_failed")
+            await call.answer("Ошибка", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ Ошибка при resend: `{type(e).__name__}`")
         return
 
-    # -------- ok / no ----------
+    # ok / no
     try:
         _, _, order_id_str, plan, user_id_str = call.data.split(":")
         order_id = int(order_id_str)
@@ -404,21 +411,15 @@ async def admin_decide(call: CallbackQuery):
         return
 
     if action == "no":
-        # отклоняем
         db_set_status(order_id, "rejected")
         try:
             await bot.send_message(user_id, "❌ *Оплата не подтверждена.* Отправь корректный чек ещё раз.")
         except Exception:
             pass
         await call.answer("Отклонено")
-        try:
-            await call.message.edit_text(call.message.text + "\n\n❌ Отклонено.")
-        except Exception:
-            pass
         return
 
     if action == "ok":
-        # если уже успешно выдано — не дублим
         if order["status"] == "accepted":
             await call.answer("Ключ уже выдан ✅", show_alert=True)
             return
@@ -426,37 +427,33 @@ async def admin_decide(call: CallbackQuery):
         key = take_key(plan)
         if not key:
             await call.answer("Ключи не найдены", show_alert=True)
-            try:
-                await bot.send_message(ADMIN_ID, "⚠️ В файле ключей нет строк. Заполни standard_keys.txt / family_keys.txt.")
-            except Exception:
-                pass
+            await bot.send_message(ADMIN_ID, "⚠️ В файле ключей нет строк. Заполни standard_keys.txt / family_keys.txt.")
             return
 
-        # сохраняем ключ в заказ (чтобы можно было resend)
         db_set_issued_key(order_id, key)
 
-        # пробуем отправить пользователю
         try:
             await send_key_to_user(user_id, key)
             db_set_status(order_id, "accepted")
             await call.answer("Выдано ✅")
-            try:
-                await call.message.edit_text(call.message.text + "\n\n✅ Принято. Подписка выдана.")
-            except Exception:
-                pass
-        except Exception as e:
-            # НЕ ставим accepted, если не смогли отправить
+        except TelegramForbiddenError:
             db_set_status(order_id, "send_failed")
-            await call.answer("Не удалось отправить", show_alert=True)
+            await call.answer("Не могу написать пользователю", show_alert=True)
             await bot.send_message(
                 ADMIN_ID,
                 f"⚠️ Принято, но отправить пользователю НЕ получилось.\n"
                 f"Заказ: *#{order_id}*\n"
-                f"Пользователь: `{user_id}`\n"
-                f"Причина: `{type(e).__name__}`\n\n"
-                "Обычно: юзер не нажал /start в боте или заблокировал бота.\n"
-                "Когда юзер нажмёт /start — нажми «♻️ Повторить отправку»."
+                f"Пользователь: `{user_id}`\n\n"
+                "Пусть пользователь снова нажмёт /start и попробуй «♻️ Повторить отправку»."
             )
+        except TelegramBadRequest as e:
+            db_set_status(order_id, "send_failed")
+            await call.answer("Ошибка Telegram", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ TelegramBadRequest при выдаче: `{e}`")
+        except Exception as e:
+            db_set_status(order_id, "send_failed")
+            await call.answer("Ошибка", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ Ошибка при выдаче: `{type(e).__name__}`")
         return
 
 # ====== Run ======
