@@ -1,326 +1,320 @@
-import os
 import asyncio
+import os
+import time
+import sqlite3
+
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
-# ================== ENV ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+# ================== НАСТРОЙКИ ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN env is empty")
-if ADMIN_ID == 0:
-    raise RuntimeError("ADMIN_ID env is empty/0")
+# твои ссылки
+TG_CHANNEL = "https://t.me/sokxyybc"
+PRIVATE_GROUP_LINK = "https://t.me/+T7CkE9me-ohkYWNi"
+REVIEW_LINK = "https://t.me/sokxyybc/23"
 
-# ================== BRAND / LINKS ==================
-VPN_NAME = "SOKXYYBC VPN"
-PRIVATE_GROUP_LINK = "https://t.me/+T7CkE9me-ohkYWNi"  # доступ навсегда (после подтверждения)
+# ссылки на Happ (замени на точные, если есть)
+HAPP_ANDROID_URL = os.getenv("HAPP_ANDROID_URL", "https://play.google.com/store")
+HAPP_IOS_URL = os.getenv("HAPP_IOS_URL", "https://apps.apple.com/")
 
-# ================== PAYMENT ==================
-# ВСТАВЬ СВОИ РЕКВИЗИТЫ СЮДА:
-PAYMENT_DETAILS = (
-    "💳 <b>Реквизиты для оплаты</b>\n\n"
-    "Перевод: <b>СБП / Карта</b>\n"
-    "Номер/телефон: <b>+7 XXX XXX-XX-XX</b>\n"
-    "Банк: <b>Тинькофф</b>\n\n"
-    "📝 Комментарий к переводу: <b>без комментариев</b>\n"
+# реквизиты оплаты (как у тебя)
+PAYMENT_TEXT = (
+    "💳 *Реквизиты для оплаты*\n\n"
+    "✅ *Основной способ (карта):*\n"
+    "Номер карты: `2204320913014587`\n\n"
+    "🔁 *Если есть комиссия — переводи через Ozon по номеру:*\n"
+    "Номер: `+79951253391`\n\n"
+    "📎 После оплаты отправь сюда *чек/скрин*.\n"
+    "Я проверю — бот выдаст ключ."
 )
 
-# ================== SUBSCRIPTIONS ==================
-# (Как ты написал)
-PLANS = {
-    "standard": {
-        "title": "Стандарт",
-        "price": "200",
-        "users": "1 пользователь",
-        "devices": "по 3 устройства",
-        "note": "Доступ навсегда",
-    },
-    "family": {
-        "title": "Семейная",
-        "price": "300",
-        "users": "8 пользователей",
-        "devices": "по 3 устройства",
-        "note": "Доступ навсегда",
-    },
-}
+# файлы с ключами
+STANDARD_KEYS_FILE = "standard_keys.txt"
+FAMILY_KEYS_FILE = "family_keys.txt"
 
-# ================== STATE (simple memory) ==================
-# user_id -> {"plan": "...", "price": "..."}
-waiting_check = {}
+# база (на Railway лучше сделать volume в /data и поставить DB_PATH=/data/orders.sqlite)
+DB_PATH = os.getenv("DB_PATH", "orders.sqlite")
 
-# ================== TEXTS ==================
-START_TEXT = (
-    f"🔥 <b>{VPN_NAME}</b>\n\n"
-    "🚀 <b>VPN с обходом глушилок</b> — когда режут скорость/душат интернет или мешают подключению.\n"
-    "🛡 Также работает как <b>обычный VPN</b>: приватность + доступ к сайтам.\n\n"
-    "✅ <b>Выдача навсегда</b> после подтверждения оплаты.\n\n"
-    "Выбери действие:"
-)
+# ================== БД ==================
+def db():
+    return sqlite3.connect(DB_PATH)
 
-SUPPORT_TEXT = (
-    "🆘 <b>Поддержка</b>\n\n"
-    "Напиши сюда сообщение — я перешлю админу."
-)
-
-def plan_text(plan_key: str) -> str:
-    p = PLANS[plan_key]
-    return (
-        f"📦 <b>{p['title']}</b>\n"
-        f"👥 {p['users']} / {p['devices']}\n"
-        f"♾ {p['note']}\n"
-        f"💰 <b>{p['price']}₽</b>"
-    )
-
-def payment_text(plan_key: str) -> str:
-    p = PLANS[plan_key]
-    return (
-        f"💳 <b>Оплата: {p['title']}</b>\n\n"
-        f"{plan_text(plan_key)}\n\n"
-        f"{PAYMENT_DETAILS}\n"
-        "📸 <b>После оплаты</b> нажми «Я оплатил(а)» и <b>скинь чек</b> одним сообщением."
-    )
-
-# ================== KEYBOARDS ==================
-def main_kb():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Купить", callback_data="buy")
-    kb.button(text="🆘 Поддержка", callback_data="support")
-    kb.adjust(1, 1)
-    return kb.as_markup()
-
-def back_kb():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="⬅️ Назад", callback_data="back")
-    kb.adjust(1)
-    return kb.as_markup()
-
-def buy_kb():
-    kb = InlineKeyboardBuilder()
-    kb.button(
-        text=f"✅ {PLANS['standard']['title']} — {PLANS['standard']['price']}₽",
-        callback_data="choose:standard"
-    )
-    kb.button(
-        text=f"👨‍👩‍👧‍👦 {PLANS['family']['title']} — {PLANS['family']['price']}₽",
-        callback_data="choose:family"
-    )
-    kb.button(text="⬅️ Назад", callback_data="back")
-    kb.adjust(1, 1, 1)
-    return kb.as_markup()
-
-def paid_kb(plan_key: str):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📨 Я оплатил(а)", callback_data=f"paid:{plan_key}")
-    kb.button(text="⬅️ Назад", callback_data="back")
-    kb.adjust(1, 1)
-    return kb.as_markup()
-
-def admin_decision_kb(user_id: int, plan_key: str):
-    kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Принять", callback_data=f"admin_ok:{user_id}:{plan_key}")
-    kb.button(text="❌ Отклонить", callback_data=f"admin_no:{user_id}:{plan_key}")
-    kb.adjust(2)
-    return kb.as_markup()
-
-# ================== HELPERS ==================
-def user_tag(u) -> str:
-    if u.username:
-        return f"@{u.username}"
-    return u.full_name
-
-# ================== USER FLOW ==================
-async def cmd_start(message: Message):
-    await message.answer(START_TEXT, reply_markup=main_kb())
-
-async def cb_back(call: CallbackQuery):
-    await call.message.edit_text(START_TEXT, reply_markup=main_kb())
-    await call.answer()
-
-async def cb_support(call: CallbackQuery):
-    await call.message.edit_text(SUPPORT_TEXT, reply_markup=back_kb())
-    await call.answer()
-
-async def cb_buy(call: CallbackQuery):
-    text = (
-        "🛒 <b>Выбор подписки</b>\n\n"
-        f"• {plan_text('standard')}\n\n"
-        f"• {plan_text('family')}\n\n"
-        "Выбери вариант:"
-    )
-    await call.message.edit_text(text, reply_markup=buy_kb())
-    await call.answer()
-
-async def cb_choose(call: CallbackQuery):
-    # choose:plan
-    _, plan_key = call.data.split(":", 1)
-    await call.message.edit_text(payment_text(plan_key), reply_markup=paid_kb(plan_key))
-    await call.answer()
-
-async def cb_paid(call: CallbackQuery):
-    # paid:plan
-    _, plan_key = call.data.split(":", 1)
-    waiting_check[call.from_user.id] = {"plan": plan_key, "price": PLANS[plan_key]["price"]}
-
-    await call.message.edit_text(
-        "📸 Ок, теперь отправь <b>чек</b> (фото/скрин/файл/текст) одним сообщением.\n\n"
-        "После этого админ подтвердит оплату.",
-        reply_markup=back_kb()
-    )
-    await call.answer()
-
-# ================== MESSAGES: чек / поддержка ==================
-async def handle_any_message(message: Message, bot: Bot):
-    uid = message.from_user.id
-
-    # 1) Если ждём чек — это чек
-    if uid in waiting_check:
-        data = waiting_check[uid]
-        plan_key = data["plan"]
-        p = PLANS[plan_key]
-
-        header = (
-            "🧾 <b>Новый чек</b>\n"
-            f"👤 Пользователь: <b>{user_tag(message.from_user)}</b>\n"
-            f"🆔 ID: <code>{uid}</code>\n"
-            f"📦 Подписка: <b>{p['title']}</b> ({p['users']} / {p['devices']})\n"
-            f"♾ Доступ: <b>навсегда</b>\n"
-            f"💰 Сумма: <b>{p['price']}₽</b>\n\n"
-            "Выбери действие:"
+def db_init():
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            plan TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            status TEXT NOT NULL,         -- created / waiting_receipt / pending_admin / accepted / rejected
+            created_at INTEGER NOT NULL
         )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status)")
+    con.commit()
+    con.close()
 
-        kb = admin_decision_kb(uid, plan_key)
+def db_get_active_order(user_id: int):
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT id, plan, amount, status FROM orders
+        WHERE user_id=? AND status IN ('created','waiting_receipt','pending_admin')
+        ORDER BY id DESC LIMIT 1
+    """, (user_id,))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    return {"id": row[0], "plan": row[1], "amount": row[2], "status": row[3]}
 
-        try:
-            # ЧЕК + КНОПКИ В ОДНОМ СООБЩЕНИИ (чтобы не пропадали)
-            if message.photo:
-                await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=header, reply_markup=kb)
-            elif message.document:
-                await bot.send_document(ADMIN_ID, message.document.file_id, caption=header, reply_markup=kb)
-            elif message.video:
-                await bot.send_video(ADMIN_ID, message.video.file_id, caption=header, reply_markup=kb)
-            elif message.text:
-                await bot.send_message(
-                    ADMIN_ID,
-                    f"{header}\n\n📝 Текст чека:\n<blockquote>{message.text}</blockquote>",
-                    reply_markup=kb
-                )
-            else:
-                await bot.send_message(ADMIN_ID, header + "\n\n(чек неизвестного типа)", reply_markup=kb)
+def db_create_order(user_id: int, username: str | None, plan: str, amount: int):
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO orders(user_id, username, plan, amount, status, created_at)
+        VALUES(?,?,?,?,?,?)
+    """, (user_id, username or "", plan, amount, "waiting_receipt", int(time.time())))
+    con.commit()
+    order_id = cur.lastrowid
+    con.close()
+    return order_id
 
-            await message.answer("✅ Чек отправлен админу. Ожидай подтверждение.")
-            return
-        except Exception:
-            await message.answer("❗ Не получилось отправить админу. Попробуй ещё раз.")
-            return
+def db_set_status(order_id: int, status: str):
+    con = db()
+    cur = con.cursor()
+    cur.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+    con.commit()
+    con.close()
 
-    # 2) Иначе — поддержка: пересылаем админу
+def db_get_order(order_id: int):
+    con = db()
+    cur = con.cursor()
+    cur.execute("SELECT id, user_id, username, plan, amount, status FROM orders WHERE id=?", (order_id,))
+    row = cur.fetchone()
+    con.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "username": row[2],
+        "plan": row[3],
+        "amount": row[4],
+        "status": row[5],
+    }
+
+# ================== КЛЮЧИ ==================
+def take_key(plan: str) -> str | None:
+    filename = STANDARD_KEYS_FILE if plan == "standard" else FAMILY_KEYS_FILE
+    if not os.path.exists(filename):
+        return None
+    with open(filename, "r", encoding="utf-8") as f:
+        lines = [x.strip() for x in f.read().splitlines() if x.strip()]
+    if not lines:
+        return None
+    return lines[0]  # НЕ удаляем, всегда один и тот же (как ты просил)
+
+# ================== КНОПКИ ==================
+def kb_start():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟩 Стандарт — 200₽", callback_data="buy:standard")],
+        [InlineKeyboardButton(text="🟦 Семейная — 300₽", callback_data="buy:family")],
+        [InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)],
+    ])
+
+def kb_payment():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)],
+    ])
+
+def kb_admin(order_id: int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Принять", callback_data=f"admin:ok:{order_id}"),
+            InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin:no:{order_id}")
+        ]
+    ])
+
+def kb_after_issue():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Скачать Happ (Android)", url=HAPP_ANDROID_URL)],
+        [InlineKeyboardButton(text="🍎 Скачать Happ (iOS)", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+    ])
+
+# ================== БОТ ==================
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
+dp = Dispatcher()
+
+@dp.message(CommandStart())
+async def start(m: Message):
+    await m.answer(
+        "⚡ *Sokxyy Обход — VPN навсегда*\n\n"
+        "Выбери подписку 👇",
+        reply_markup=kb_start()
+    )
+
+@dp.callback_query(F.data.startswith("buy:"))
+async def buy(call: CallbackQuery):
+    user_id = call.from_user.id
+    username = call.from_user.username
+
+    # 1 активный заказ — чтобы не спамили
+    active = db_get_active_order(user_id)
+    if active:
+        await call.message.answer(
+            f"⏳ У тебя уже есть активный заказ *#{active['id']}*.\n"
+            "Просто отправь сюда чек/скрин оплаты.",
+            reply_markup=kb_payment()
+        )
+        await call.answer()
+        return
+
+    plan = call.data.split(":")[1]
+    amount = 200 if plan == "standard" else 300
+
+    order_id = db_create_order(user_id, username, plan, amount)
+
+    plan_text = "🟩 Стандарт" if plan == "standard" else "🟦 Семейная"
+    await call.message.answer(
+        f"🧾 *Заказ #{order_id}*\n"
+        f"Тариф: *{plan_text}*\n"
+        f"Сумма: *{amount}₽*\n\n"
+        f"{PAYMENT_TEXT}\n\n"
+        "📎 *Отправь чек/скрин сюда в чат* (фото/файл/текст).",
+        reply_markup=kb_payment()
+    )
+    await call.answer()
+
+@dp.message(F.content_type.in_({"photo", "document", "text"}))
+async def receipt(m: Message):
+    user_id = m.from_user.id
+    username = m.from_user.username
+
+    active = db_get_active_order(user_id)
+    if not active:
+        await m.answer(
+            "⚠️ У тебя нет активного заказа.\n"
+            "Нажми /start и выбери тариф, потом оплати и отправь чек."
+        )
+        return
+
+    # если уже отправлено админу — не дублим
+    if active["status"] == "pending_admin":
+        await m.answer("⏳ Чек уже отправлен админу. Жди подтверждения.")
+        return
+
+    db_set_status(active["id"], "pending_admin")
+
+    # админу всегда сообщение + копия чека
+    await bot.send_message(
+        ADMIN_ID,
+        "🔔 *Чек на проверку*\n"
+        f"Заказ: *#{active['id']}*\n"
+        f"Пользователь: `{user_id}` (@{username or '—'})\n"
+        f"Тариф: *{active['plan']}*\n"
+        f"Сумма: *{active['amount']}₽*\n\n"
+        "Принять оплату?",
+        reply_markup=kb_admin(active["id"])
+    )
+
     try:
-        await bot.send_message(
-            ADMIN_ID,
-            "🆘 <b>Поддержка</b>\n"
-            f"От: <b>{user_tag(message.from_user)}</b>\n"
-            f"ID: <code>{uid}</code>"
-        )
-
-        if message.photo:
-            await bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption="(вложение)")
-        elif message.document:
-            await bot.send_document(ADMIN_ID, message.document.file_id, caption="(вложение)")
-        elif message.video:
-            await bot.send_video(ADMIN_ID, message.video.file_id, caption="(вложение)")
-        elif message.text:
-            await bot.send_message(ADMIN_ID, message.text)
-        else:
-            await bot.send_message(ADMIN_ID, "(сообщение неизвестного типа)")
-
-        await message.answer("✅ Передал админу. Ответят скоро.")
+        await m.copy_to(ADMIN_ID)
     except Exception:
-        await message.answer("❗ Не смог переслать админу. Попробуй позже.")
+        pass
 
-# ================== ADMIN ACTIONS ==================
-async def admin_ok(call: CallbackQuery, bot: Bot):
-    # admin_ok:user_id:plan
-    _, user_id_s, plan_key = call.data.split(":", 2)
-    user_id = int(user_id_s)
-    p = PLANS[plan_key]
+    await m.answer("✅ Чек отправлен админу. Жди подтверждения.")
 
-    waiting_check.pop(user_id, None)
+@dp.callback_query(F.data.startswith("admin:"))
+async def admin(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        await call.answer("Нет доступа", show_alert=True)
+        return
 
-    # выдаём "навсегда"
-    try:
-        await bot.send_message(
-            user_id,
-            f"✅ <b>Оплата подтверждена!</b>\n\n"
-            f"🔥 <b>{VPN_NAME}</b>\n"
-            f"📦 Подписка: <b>{p['title']}</b> ({p['users']} / {p['devices']})\n"
-            f"♾ Доступ: <b>навсегда</b>\n\n"
-            f"🔗 <b>Твой доступ:</b>\n{PRIVATE_GROUP_LINK}\n\n"
-            "Если ссылка не открывается — напиши в поддержку."
-        )
+    _, action, order_id_str = call.data.split(":")
+    order_id = int(order_id_str)
 
-        # пометка для админа (и для фото/дока caption, и для текстового)
-        if call.message.caption is not None:
-            await call.message.edit_caption((call.message.caption or "") + "\n\n✅ <b>ПРИНЯТО</b>")
-        else:
-            await call.message.edit_text("✅ ПРИНЯТО")
-    except Exception:
+    order = db_get_order(order_id)
+    if not order:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+
+    if action == "no":
+        db_set_status(order_id, "rejected")
         try:
-            await call.message.edit_text("✅ Принято, но не смог написать пользователю (возможно, он не запускал бота).")
+            await bot.send_message(order["user_id"], "❌ Оплата отклонена. Отправь корректный чек ещё раз.")
         except Exception:
             pass
+        await call.answer("Отклонено")
+        return
 
-    await call.answer("OK")
+    if action == "ok":
+        # берём ключ
+        key = take_key(order["plan"])
+        if not key:
+            await call.answer("Ключей нет", show_alert=True)
+            await bot.send_message(ADMIN_ID, "⚠️ В файлах ключей пусто. Заполни standard_keys.txt / family_keys.txt.")
+            return
 
-async def admin_no(call: CallbackQuery, bot: Bot):
-    # admin_no:user_id:plan
-    _, user_id_s, plan_key = call.data.split(":", 2)
-    user_id = int(user_id_s)
-
-    waiting_check.pop(user_id, None)
-
-    try:
-        await bot.send_message(
-            user_id,
-            "❌ <b>Оплата отклонена</b>\n\n"
-            "Чек не читается или оплата не пришла.\n"
-            "Отправь чек ещё раз или напиши в поддержку."
-        )
-
-        if call.message.caption is not None:
-            await call.message.edit_caption((call.message.caption or "") + "\n\n❌ <b>ОТКЛОНЕНО</b>")
-        else:
-            await call.message.edit_text("❌ ОТКЛОНЕНО")
-    except Exception:
+        # сначала пытаемся отправить пользователю
         try:
-            await call.message.edit_text("❌ Отклонено (не смог написать пользователю).")
-        except Exception:
-            pass
+            plan_text = "🟩 Стандарт" if order["plan"] == "standard" else "🟦 Семейная"
+            await bot.send_message(
+                order["user_id"],
+                "✅ *Оплата подтверждена!*\n\n"
+                f"Тариф: *{plan_text}* (навсегда)\n\n"
+                "🔑 *Твой ключ:*\n"
+                f"`{key}`\n\n"
+                "📲 *Как подключиться (Happ):*\n"
+                "1) Скачай приложение Happ\n"
+                "2) Открой Happ\n"
+                "3) Нажми «Добавить / Import / Подписка»\n"
+                "4) Вставь туда *ключ* (который выше)\n\n"
+                "🌍 После добавления появятся сервера — выбирай любой и подключайся.\n\n"
+                "🔒 Вступи в приватную группу (обязательно для обслуживания).\n"
+                "⭐ Оставь отзыв — буду благодарен.",
+                reply_markup=kb_after_issue()
+            )
+        except TelegramForbiddenError:
+            await call.answer("Не могу написать юзеру", show_alert=True)
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ Не смог отправить ключ пользователю `{order['user_id']}`.\n"
+                "Причина: пользователь заблокировал бота или не может получить сообщение.\n"
+                "Пусть он откроет бота и нажмёт /start, потом попробуй снова."
+            )
+            return
+        except TelegramBadRequest as e:
+            await call.answer("TelegramBadRequest", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ TelegramBadRequest при выдаче: `{e}`")
+            return
+        except Exception as e:
+            await call.answer("Ошибка", show_alert=True)
+            await bot.send_message(ADMIN_ID, f"⚠️ Ошибка при выдаче: `{type(e).__name__}`")
+            return
 
-    await call.answer("NO")
+        # только после успешной отправки — отмечаем accepted
+        db_set_status(order_id, "accepted")
+        await call.answer("Выдано ✅")
+        return
 
-# ================== RUN ==================
 async def main():
-    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not set")
+    if ADMIN_ID == 0:
+        raise RuntimeError("ADMIN_ID is not set")
 
-    dp.message.register(cmd_start, CommandStart())
-
-    dp.callback_query.register(cb_back, F.data == "back")
-    dp.callback_query.register(cb_buy, F.data == "buy")
-    dp.callback_query.register(cb_support, F.data == "support")
-    dp.callback_query.register(cb_choose, F.data.startswith("choose:"))
-    dp.callback_query.register(cb_paid, F.data.startswith("paid:"))
-
-    dp.callback_query.register(admin_ok, F.data.startswith("admin_ok:"))
-    dp.callback_query.register(admin_no, F.data.startswith("admin_no:"))
-
-    dp.message.register(handle_any_message)
-
+    db_init()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
