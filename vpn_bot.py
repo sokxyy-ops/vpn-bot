@@ -157,7 +157,7 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start(m: Message):
     await m.answer(
-        "⚡ *Sokxyy Обход — VPN навсегда*\n\n"
+        "⚡ *sokxyy обход — навсегда*\n\n"
         "✅ Доступ навсегда\n"
         "🔑 После оплаты выдаётся ключ для *Happ*\n\n"
         "Выбери тариф 👇",
@@ -317,4 +317,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
