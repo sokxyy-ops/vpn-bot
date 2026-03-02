@@ -42,7 +42,8 @@ FAMILY_KEYS_FILE = "family_keys.txt"
 DB_PATH = os.getenv("DB_PATH", "orders.sqlite")
 
 def db():
-    return sqlite3.connect(DB_PATH)
+    # check_same_thread=False чтобы sqlite не душил в редких случаях
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 def _ensure_column(cur: sqlite3.Cursor, table: str, col: str, col_def: str):
     cur.execute(f"PRAGMA table_info({table})")
@@ -64,35 +65,13 @@ def db_init():
             created_at INTEGER NOT NULL
         )
     """)
-
-    # Миграции без ошибок (если таблица уже была)
+    # миграции (если база старая)
     _ensure_column(cur, "orders", "order_msg_chat_id", "INTEGER DEFAULT NULL")
     _ensure_column(cur, "orders", "order_msg_id", "INTEGER DEFAULT NULL")
 
     cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status)")
     con.commit()
     con.close()
-
-def db_get_active_order(user_id: int):
-    con = db()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT id, plan, amount, status, order_msg_chat_id, order_msg_id FROM orders
-        WHERE user_id=? AND status IN ('waiting_receipt','pending_admin')
-        ORDER BY id DESC LIMIT 1
-    """, (user_id,))
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return None
-    return {
-        "id": row[0],
-        "plan": row[1],
-        "amount": row[2],
-        "status": row[3],
-        "order_msg_chat_id": row[4],
-        "order_msg_id": row[5],
-    }
 
 def db_create_order(user_id: int, username: str | None, plan: str, amount: int):
     con = db()
@@ -116,34 +95,104 @@ def db_set_status(order_id: int, status: str):
 def db_set_order_message(order_id: int, chat_id: int, msg_id: int):
     con = db()
     cur = con.cursor()
-    cur.execute(
-        "UPDATE orders SET order_msg_chat_id=?, order_msg_id=? WHERE id=?",
-        (chat_id, msg_id, order_id),
-    )
-    con.commit()
-    con.close()
+    # если колонок вдруг нет — не падаем
+    try:
+        cur.execute(
+            "UPDATE orders SET order_msg_chat_id=?, order_msg_id=? WHERE id=?",
+            (chat_id, msg_id, order_id),
+        )
+        con.commit()
+    except sqlite3.OperationalError:
+        pass
+    finally:
+        con.close()
+
+def db_get_active_order(user_id: int):
+    con = db()
+    cur = con.cursor()
+
+    # Пытаемся новой схемой (с message_id)
+    try:
+        cur.execute("""
+            SELECT id, plan, amount, status, order_msg_chat_id, order_msg_id FROM orders
+            WHERE user_id=? AND status IN ('waiting_receipt','pending_admin')
+            ORDER BY id DESC LIMIT 1
+        """, (user_id,))
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "plan": row[1],
+            "amount": row[2],
+            "status": row[3],
+            "order_msg_chat_id": row[4],
+            "order_msg_id": row[5],
+        }
+    except sqlite3.OperationalError:
+        # Старая база (без колонок order_msg_*)
+        cur.execute("""
+            SELECT id, plan, amount, status FROM orders
+            WHERE user_id=? AND status IN ('waiting_receipt','pending_admin')
+            ORDER BY id DESC LIMIT 1
+        """, (user_id,))
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "plan": row[1],
+            "amount": row[2],
+            "status": row[3],
+            "order_msg_chat_id": None,
+            "order_msg_id": None,
+        }
 
 def db_get_order(order_id: int):
     con = db()
     cur = con.cursor()
-    cur.execute("""
-        SELECT id, user_id, username, plan, amount, status, order_msg_chat_id, order_msg_id
-        FROM orders WHERE id=?
-    """, (order_id,))
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return None
-    return {
-        "id": row[0],
-        "user_id": row[1],
-        "username": row[2],
-        "plan": row[3],
-        "amount": row[4],
-        "status": row[5],
-        "order_msg_chat_id": row[6],
-        "order_msg_id": row[7],
-    }
+
+    try:
+        cur.execute("""
+            SELECT id, user_id, username, plan, amount, status, order_msg_chat_id, order_msg_id
+            FROM orders WHERE id=?
+        """, (order_id,))
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "username": row[2],
+            "plan": row[3],
+            "amount": row[4],
+            "status": row[5],
+            "order_msg_chat_id": row[6],
+            "order_msg_id": row[7],
+        }
+    except sqlite3.OperationalError:
+        # Старая база
+        cur.execute("""
+            SELECT id, user_id, username, plan, amount, status
+            FROM orders WHERE id=?
+        """, (order_id,))
+        row = cur.fetchone()
+        con.close()
+        if not row:
+            return None
+        return {
+            "id": row[0],
+            "user_id": row[1],
+            "username": row[2],
+            "plan": row[3],
+            "amount": row[4],
+            "status": row[5],
+            "order_msg_chat_id": None,
+            "order_msg_id": None,
+        }
 
 # ================== KEYS (НЕ УДАЛЯЕМ) ==================
 def take_key(plan: str) -> str | None:
@@ -162,13 +211,6 @@ def plan_name(plan: str) -> str:
 
 def admin_url() -> str:
     return f"tg://user?id={ADMIN_ID}"
-
-async def safe_delete(chat_id: int, message_id: int):
-    # Удаляем аккуратно, без падений
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception:
-        pass
 
 # ================== KEYBOARDS ==================
 def kb_start():
@@ -199,7 +241,6 @@ def kb_admin(order_id: int):
     ])
 
 def kb_admin_resolved(status: str):
-    # “не нажимается”: ставим noop-callback
     if status == "accepted":
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Принято", callback_data="noop:accepted")]
@@ -275,7 +316,7 @@ async def buy(call: CallbackQuery):
         reply_markup=kb_order_controls(order_id)
     )
 
-    # Запоминаем ID сообщения с реквизитами, чтобы удалить при отмене
+    # Запоминаем ID сообщения с реквизитами (если база старая — просто пропустится)
     db_set_order_message(order_id, sent.chat.id, sent.message_id)
 
     await call.answer()
@@ -294,13 +335,15 @@ async def cancel_order(call: CallbackQuery):
         await call.answer("Этот заказ уже закрыт", show_alert=True)
         return
 
-    # Ставим cancelled
     prev_status = order["status"]
     db_set_status(order_id, "cancelled")
 
-    # Удаляем сообщение с реквизитами (то, что бот отправлял)
+    # Удаляем сообщение с реквизитами (ботовское), если оно сохранено
     if order.get("order_msg_chat_id") and order.get("order_msg_id"):
-        await safe_delete(order["order_msg_chat_id"], order["order_msg_id"])
+        try:
+            await bot.delete_message(order["order_msg_chat_id"], order["order_msg_id"])
+        except Exception:
+            pass
 
     # Уведомим админа
     try:
@@ -401,7 +444,7 @@ async def admin(call: CallbackQuery):
         await call.answer("Заказ не найден", show_alert=True)
         return
 
-    # Если отменён — показываем и блокируем
+    # Если отменён — блокируем и меняем кнопки
     if order["status"] == "cancelled":
         try:
             await call.message.edit_reply_markup(reply_markup=kb_admin_resolved("cancelled"))
@@ -413,7 +456,6 @@ async def admin(call: CallbackQuery):
     if action == "no":
         db_set_status(order_id, "rejected")
 
-        # Обновляем кнопки у админа
         try:
             await call.message.edit_reply_markup(reply_markup=kb_admin_resolved("rejected"))
         except Exception:
@@ -471,7 +513,6 @@ async def admin(call: CallbackQuery):
 
         db_set_status(order_id, "accepted")
 
-        # Обновляем кнопки у админа на “✅ Принято” (не нажимается)
         try:
             await call.message.edit_reply_markup(reply_markup=kb_admin_resolved("accepted"))
         except Exception:
