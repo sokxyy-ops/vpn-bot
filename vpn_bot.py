@@ -15,7 +15,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # ================== LINKS ==================
 TG_CHANNEL = "https://t.me/sokxyybc"
-PRIVATE_GROUP_LINK = "https://t.me/+T7CkE9me-ohkYWNi"
+PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
 
 # Клиенты Happ
@@ -317,3 +317,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
