@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 import sqlite3
+import uuid
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -15,7 +16,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # ================== LINKS ==================
 TG_CHANNEL = "https://t.me/sokxyybc"
-PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"
+PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"  # ✅ обновил
 REVIEW_LINK = "https://t.me/sokxyybc/23"
 
 # Клиенты Happ
@@ -39,8 +40,6 @@ STANDARD_KEYS_FILE = "standard_keys.txt"
 FAMILY_KEYS_FILE = "family_keys.txt"
 
 # ================== DB ==================
-# Если хочешь чтобы база не слетала на Railway:
-# добавь Volume /data и поставь переменную DB_PATH=/data/orders.sqlite
 DB_PATH = os.getenv("DB_PATH", "orders.sqlite")
 
 def db():
@@ -157,7 +156,7 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start(m: Message):
     await m.answer(
-        "⚡ *sokxyy обход — навсегда*\n\n"
+        "⚡ *Sokxyy Обход — VPN навсегда*\n\n"
         "✅ Доступ навсегда\n"
         "🔑 После оплаты выдаётся ключ для *Happ*\n\n"
         "Выбери тариф 👇",
@@ -169,7 +168,6 @@ async def buy(call: CallbackQuery):
     user_id = call.from_user.id
     username = call.from_user.username
 
-    # 1 активный заказ — чтобы не заспамили
     active = db_get_active_order(user_id)
     if active:
         await call.message.answer(
@@ -208,23 +206,35 @@ async def receipt(m: Message):
         await m.answer("⏳ Чек уже отправлен админу. Жди подтверждения.")
         return
 
-    db_set_status(active["id"], "pending_admin")
+    # ✅ ВАЖНО: сначала пробуем отправить админу. Статус меняем только если отправка успешна.
+    safe_username = username or "—"
 
-    await bot.send_message(
-        ADMIN_ID,
-        "🔔 *Чек на проверку*\n"
-        f"Заказ: *#{active['id']}*\n"
-        f"Пользователь: `{user_id}` (@{username or '—'})\n"
-        f"Тариф: *{active['plan']}*\n"
-        f"Сумма: *{active['amount']}₽*\n\n"
-        "Принять оплату?",
-        reply_markup=kb_admin(active["id"])
-    )
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            "🔔 Чек на проверку\n"
+            f"Заказ: #{active['id']}\n"
+            f"Пользователь: {user_id} (@{safe_username})\n"
+            f"Тариф: {active['plan']}\n"
+            f"Сумма: {active['amount']}₽\n\n"
+            "Принять оплату?",
+            reply_markup=kb_admin(active["id"]),
+            parse_mode=None,  # ✅ отключаем Markdown, чтобы username с _ не ломал отправку
+        )
+    except Exception as e:
+        # Логи смотри в Railway Logs
+        print("ADMIN SEND ERROR:", repr(e))
+        await m.answer("⚠️ Не смог отправить чек админу. Попробуй отправить ещё раз через минуту.")
+        return
+
+    # если сюда дошли — админу отправилось, теперь фиксируем pending_admin
+    db_set_status(active["id"], "pending_admin")
 
     try:
         await m.copy_to(ADMIN_ID)
-    except Exception:
-        pass
+    except Exception as e:
+        # копия чека не критична, кнопки уже ушли
+        print("COPY TO ADMIN ERROR:", repr(e))
 
     await m.answer("✅ Чек отправлен админу. Жди подтверждения.")
 
@@ -281,27 +291,26 @@ async def admin(call: CallbackQuery):
             await bot.send_message(ADMIN_ID, "⚠️ В файлах ключей пусто. Заполни standard_keys.txt / family_keys.txt.")
             return
 
-        # Сначала пытаемся отправить пользователю
         try:
             await send_key_to_user(order["user_id"], order["plan"], key)
         except TelegramForbiddenError:
             await call.answer("Не могу написать юзеру", show_alert=True)
             await bot.send_message(
                 ADMIN_ID,
-                f"⚠️ Не смог отправить пользователю `{order['user_id']}`.\n"
-                "Пусть он откроет бота и нажмёт /start, затем попробуй снова."
+                f"⚠️ Не смог отправить пользователю {order['user_id']}.\n"
+                "Пусть он откроет бота и нажмёт /start, затем попробуй снова.",
+                parse_mode=None
             )
             return
         except TelegramBadRequest as e:
             await call.answer("TelegramBadRequest", show_alert=True)
-            await bot.send_message(ADMIN_ID, f"⚠️ TelegramBadRequest при выдаче: `{e}`")
+            await bot.send_message(ADMIN_ID, f"⚠️ TelegramBadRequest при выдаче: {e}", parse_mode=None)
             return
         except Exception as e:
             await call.answer("Ошибка", show_alert=True)
-            await bot.send_message(ADMIN_ID, f"⚠️ Ошибка при выдаче: `{type(e).__name__}`")
+            await bot.send_message(ADMIN_ID, f"⚠️ Ошибка при выдаче: {type(e).__name__}", parse_mode=None)
             return
 
-        # Только после успешной отправки
         db_set_status(order_id, "accepted")
         await call.answer("Выдано ✅")
         return
@@ -317,5 +326,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
