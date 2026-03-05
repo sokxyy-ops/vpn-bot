@@ -312,14 +312,8 @@ def kb_admin(order_id: int):
     ])
 
 
-def kb_after_issue(key: str):
-    rows = []
-
-    # ⚡ Подключить Happ — просто ссылка на ключ (если начинается с happ://)
-    if key and isinstance(key, str) and key.startswith("happ://"):
-        rows.append([InlineKeyboardButton(text="⚡ Подключить Happ", url=key)])
-
-    rows += [
+def kb_after_issue():
+    rows = [
         [InlineKeyboardButton(text="📋 Скопировать ключ", callback_data="sub:copy")],
         [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
         [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
@@ -353,7 +347,6 @@ async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
         else:
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
     except Exception:
-        # запасной вариант
         await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
@@ -361,11 +354,10 @@ async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
 @dp.message(CommandStart())
 async def start(m: Message):
     await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main())
-    # просто ставим нижнюю клаву, без сообщения
+    # просто ставим нижнюю клаву без лишних слов
     try:
         await bot.send_message(m.chat.id, " ", reply_markup=kb_reply_menu())
     except Exception:
-        # если не нравится пробел — можно убрать совсем
         pass
 
 
@@ -393,11 +385,9 @@ async def mysub_btn(m: Message):
     if not sub:
         await m.answer(text_subscription_card(m.from_user, None), reply_markup=kb_sub_no_sub())
         return
-
-    key = sub.get("issued_key") or ""
     await m.answer(
         text_subscription_card(m.from_user, sub),
-        reply_markup=kb_after_issue(key)
+        reply_markup=kb_after_issue()
     )
 
 
@@ -423,15 +413,12 @@ async def menu_router(call: CallbackQuery):
                     reply_markup=kb_sub_no_sub()
                 )
                 return
-
-            key = sub.get("issued_key") or ""
             await call.message.answer(
                 text_subscription_card(call.from_user, sub),
-                reply_markup=kb_after_issue(key)
+                reply_markup=kb_after_issue()
             )
             return
     finally:
-        # ✅ ВСЕГДА гасим "загрузку"
         try:
             await call.answer()
         except Exception:
@@ -498,7 +485,6 @@ async def cancel_order(call: CallbackQuery):
 
         db_set_status(order_id, "cancelled")
 
-        # удаляем сообщение с реквизитами (или хотя бы убираем кнопки)
         try:
             msg_id = order.get("payment_msg_id") or call.message.message_id
             await bot.delete_message(chat_id=user_id, message_id=msg_id)
@@ -533,7 +519,6 @@ async def receipt(m: Message):
 
     safe_username = username or "—"
 
-    # сначала отправляем админу кнопки (если не отправится — статус не трогаем)
     try:
         await bot.send_message(
             ADMIN_ID,
@@ -553,7 +538,6 @@ async def receipt(m: Message):
 
     db_set_status(active["id"], "pending_admin")
 
-    # копия чека админу
     try:
         await m.copy_to(ADMIN_ID)
     except Exception as e:
@@ -574,12 +558,12 @@ async def send_key_to_user(user_id: int, plan: str, key: str):
         "🔑 *Твой ключ:*\n"
         f"> {key}\n\n"
         "📲 *Как подключиться (Happ):*\n"
-        "1) Скачай Happ\n"
+        "1) Скачай Happ (кнопки ниже)\n"
         "2) Открой приложение\n"
         "3) Нажми «Добавить / Import / Подписка»\n"
         "4) Вставь ключ\n\n"
         "Нажми кнопки ниже 👇",
-        reply_markup=kb_after_issue(key)
+        reply_markup=kb_after_issue()
     )
 
 
@@ -598,7 +582,6 @@ async def admin(call: CallbackQuery):
             await call.answer("Заказ не найден", show_alert=True)
             return
 
-        # если уже решён — не даём нажимать повторно
         if order["status"] in ("accepted", "rejected", "cancelled"):
             await call.answer("Уже решено", show_alert=True)
             try:
@@ -607,7 +590,7 @@ async def admin(call: CallbackQuery):
                 pass
             return
 
-        # ✅ скрываем кнопки у админа
+        # убираем кнопки
         try:
             await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
@@ -658,7 +641,6 @@ async def admin(call: CallbackQuery):
             await call.answer("Выдано ✅")
             return
     finally:
-        # на всякий — гасим спиннер
         try:
             await call.answer()
         except Exception:
@@ -675,7 +657,6 @@ async def sub_copy(call: CallbackQuery):
             return
 
         key = sub["issued_key"]
-        # отдельным сообщением, чтобы удобно копировать (в Telegram можно тапнуть и скопировать)
         await call.message.answer(f"📋 Скопируй ключ:\n`{key}`")
     finally:
         try:
