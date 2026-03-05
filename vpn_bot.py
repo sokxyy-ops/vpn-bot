@@ -20,7 +20,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip().lstrip("@")  # опционально
 
 # Баннер (опционально): путь к картинке в проекте, напр. "banner.jpg"
-BANNER_PATH = os.getenv("BANNER_PATH", "banner.jpg")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BANNER_PATH = os.path.join(BASE_DIR, "banner.jpg")
 
 # ================== LINKS ==================
 TG_CHANNEL = "https://t.me/sokxyybc"
@@ -652,3 +653,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
