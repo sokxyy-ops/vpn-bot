@@ -247,7 +247,7 @@ def db_mark_resend(order_id: int):
 def plan_meta(plan: str):
     if plan == "standard":
         return "🟩 Стандарт", "👤 1 пользователь • 📱 до 3 устройств", "3", 200
-    return "🟦 Семейная", "👥 до 8 пользователей • 📱 до 3 устройств каждому", "24", 300
+    return "🟦 Семейная", "👥 до 8 пользователей • 📱 до 3 устройств каждому", "3", 310
 
 # ================== KEYS ==================
 def take_key(plan: str) -> Optional[str]:
@@ -758,4 +758,5 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
