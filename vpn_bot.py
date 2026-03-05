@@ -297,45 +297,35 @@ def text_buy_intro():
     )
 
 
-def text_subscription_card(user_obj, sub: Optional[dict]):
-    u = user_obj.from_user
-    name = (u.first_name or "—").strip()
-    uid = u.id
+def text_subscription_card(user: Message | CallbackQuery, sub: Optional[dict]):
+    from_user = user.from_user if isinstance(user, Message) else user.from_user
+    name = (from_user.first_name or "—").strip()
+    uid = from_user.id
 
     if not sub:
         return (
             "👤 *Профиль:*\n"
-            "```text\n"
-            f"Имя: {name}\n"
-            f"ID: {uid}\n"
-            "```\n\n"
-            "🔗 *Подписка:*\n"
-            "```text\n"
-            "Нет активной подписки\n"
-            "```\n\n"
+            f"> Имя: {name}\n"
+            f"> ID: {uid}\n\n"
+            "🔗 *Ваша подписка:*\n"
+            "> Нет активной подписки\n\n"
             "Нажми *Купить подписку* 👇"
         )
 
-    plan_name, user_line, devices_line, _users, _amount = plan_meta(sub["plan"])
+    plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
     key = sub.get("issued_key") or "—"
 
     return (
         "👤 *Профиль:*\n"
-        "```text\n"
-        f"Имя: {name}\n"
-        f"ID: {uid}\n"
-        "```\n\n"
+        f"> Имя: {name}\n"
+        f"> ID: {uid}\n\n"
         "🔗 *Ваш ключ (скопируй):*\n"
-        "```text\n"
-        f"{key}\n"
-        "```\n\n"
+        f"> {key}\n\n"
         "📄 *Информация о тарифе:*\n"
-        "```text\n"
-        f"Тариф: {plan_name} • Навсегда\n"
-        f"{user_line}\n"
-        f"{devices_line}\n"
-        "```\n\n"
-        "👇 Используй кнопки ниже для подключения"
+        f"> Тариф: {plan_name} • ♾ Навсегда\n"
+        f"> {conditions}\n"
+        f"> Лимит устройств: {device_limit}\n\n"
+        "👇 Используй кнопки ниже для управления"
     )
 
 
@@ -645,3 +635,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
