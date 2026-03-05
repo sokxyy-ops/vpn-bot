@@ -263,10 +263,10 @@ def take_key(plan: str) -> Optional[str]:
 # ================== UI TEXT ==================
 def text_menu():
     return (
-        "⚡ *Sokxyy Обход — VPN*\n\n"
+        "⚡ *sokxyy обход VPN*\n\n"
         "🛡 Обычный VPN + режим обхода блокировок\n"
         "♾ Доступ *навсегда*\n"
-        "🔑 Выдача ключа для *Happ* после оплаты\n\n"
+        "🔑 Выдача подписки для *Happ* после оплаты\n\n"
         "👇 Выбери действие ниже"
     )
 
@@ -326,7 +326,7 @@ def kb_main():
 def kb_buy():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟩 Стандарт — 200₽ (1 пользователь • до 3 устройств)", callback_data="buy:standard")],
-        [InlineKeyboardButton(text="🟦 Семейная — 300₽ (до 8 пользователей • до 3 устройств каждому)", callback_data="buy:family")],
+        [InlineKeyboardButton(text="🟦 Семейная — 310₽ (до 8 пользователей • до 3 устройств)", callback_data="buy:family")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ])
 
@@ -758,3 +758,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
