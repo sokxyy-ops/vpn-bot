@@ -8,7 +8,8 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton,
+    FSInputFile
 )
 from aiogram.filters import CommandStart, Command
 from aiogram.client.default import DefaultBotProperties
@@ -19,16 +20,16 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "").strip().lstrip("@")  # опционально
 
-# Баннер (опционально): путь к картинке в проекте, напр. "banner.jpg"
+# ================== FILE PATHS (BANNER) ==================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BANNER_PATH = os.path.join(BASE_DIR, "banner.jpg")
+BANNER_PATH = os.path.join(BASE_DIR, "banner.jpg")  # banner.jpg рядом с vpn_bot.py
 
 # ================== LINKS ==================
 TG_CHANNEL = "https://t.me/sokxyybc"
 PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
 
-# Клиенты Happ
+# Happ clients
 HAPP_ANDROID_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
 HAPP_IOS_URL = "https://apps.apple.com/app/happ-proxy-utility/id6504287215"
 HAPP_WINDOWS_URL = "https://happ.su/"
@@ -40,16 +41,16 @@ PAYMENT_TEXT = (
     "`2204320913014587`\n\n"
     "🔁 *Если есть комиссия — переводи через Ozon по номеру:*\n"
     "`+79951253391`\n\n"
-    "📎 После оплаты отправь сюда *чек / скрин*.\n"
+    "📎 После оплаты отправь сюда *чек/скрин*.\n"
     "Я проверю — бот выдаст ключ 🔑"
 )
 
 # ================== KEY FILES ==================
-STANDARD_KEYS_FILE = "standard_keys.txt"
-FAMILY_KEYS_FILE = "family_keys.txt"
+STANDARD_KEYS_FILE = os.path.join(BASE_DIR, "standard_keys.txt")
+FAMILY_KEYS_FILE = os.path.join(BASE_DIR, "family_keys.txt")
 
 # ================== DB ==================
-DB_PATH = os.getenv("DB_PATH", "orders.sqlite")
+DB_PATH = os.getenv("DB_PATH", os.path.join(BASE_DIR, "orders.sqlite"))
 
 
 def db():
@@ -110,7 +111,7 @@ def db_get_last_accepted(user_id: int):
     con = db()
     cur = con.cursor()
     cur.execute("""
-        SELECT id, plan, amount, status, issued_key, accepted_at
+        SELECT id, plan, amount, issued_key, accepted_at
         FROM orders
         WHERE user_id=? AND status='accepted'
         ORDER BY id DESC LIMIT 1
@@ -119,14 +120,7 @@ def db_get_last_accepted(user_id: int):
     con.close()
     if not row:
         return None
-    return {
-        "id": row[0],
-        "plan": row[1],
-        "amount": row[2],
-        "status": row[3],
-        "issued_key": row[4],
-        "accepted_at": row[5],
-    }
+    return {"id": row[0], "plan": row[1], "amount": row[2], "issued_key": row[3], "accepted_at": row[4]}
 
 
 def db_create_order(user_id: int, username: Optional[str], plan: str, amount: int):
@@ -193,12 +187,23 @@ def db_get_order(order_id: int):
 # ================== PLAN INFO ==================
 def plan_meta(plan: str):
     """
-    returns (plan_name, conditions_text, device_limit_text, amount)
+    returns (plan_name, desc_line, devices_line, users_line, amount)
     """
     if plan == "standard":
-        return ("🟩 Стандарт", "👤 1 пользователь • 📱 до 3 устройств", "3", 200)
-    # family
-    return ("🟦 Семейная", "👥 до 8 пользователей • 📱 до 3 устройств каждому", "24", 300)
+        return (
+            "🟩 Стандарт",
+            "👤 1 пользователь",
+            "📱 до 3 устройств",
+            "—",
+            200
+        )
+    return (
+        "🟦 Семейная",
+        "👥 до 8 пользователей",
+        "📱 до 3 устройств каждому",
+        "8 пользователей",
+        300
+    )
 
 
 # ================== KEYS (НЕ УДАЛЯЕМ) ==================
@@ -215,17 +220,12 @@ def take_key(plan: str) -> Optional[str]:
 
 # ================== KEYBOARDS ==================
 def kb_reply_menu():
-    # Нижняя клавиатура как у “сервисных” ботов
     rows = [
         [KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")],
     ]
     if ADMIN_USERNAME:
         rows.append([KeyboardButton(text="🆘 Поддержка")])
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True,
-        input_field_placeholder="Выбери действие…"
-    )
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, input_field_placeholder="Выбери действие…")
 
 
 def kb_main():
@@ -238,15 +238,9 @@ def kb_main():
 
 def kb_buy():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="🟩 Стандарт — 200₽ (1 пользователь • до 3 устройств)",
-            callback_data="buy:standard"
-        )],
-        [InlineKeyboardButton(
-            text="🟦 Семейная — 300₽ (до 8 пользователей • до 3 устройств каждому)",
-            callback_data="buy:family"
-        )],
-        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="menu:main")],
+        [InlineKeyboardButton(text="🟩 Стандарт — 200₽ (1 пользователь • до 3 устройств)", callback_data="buy:standard")],
+        [InlineKeyboardButton(text="🟦 Семейная — 300₽ (до 8 пользователей • до 3 устройств каждому)", callback_data="buy:family")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ])
 
 
@@ -283,7 +277,7 @@ def kb_after_issue():
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ================== UI MESSAGES ==================
+# ================== UI TEXT ==================
 def text_menu():
     return (
         "⚡ *Sokxyy Обход — VPN*\n\n"
@@ -297,18 +291,16 @@ def text_menu():
 def text_buy_intro():
     return (
         "🛒 *Покупка подписки*\n\n"
-        "Выбери тариф:\n"
-        "🟩 *Стандарт* — 1 пользователь, до 3 устройств\n"
-        "🟦 *Семейная* — до 8 пользователей, до 3 устройств каждому\n\n"
-        "После оплаты просто отправь чек — я выдам ключ 🔑"
+        "🟩 *Стандарт*: 1 пользователь, до 3 устройств\n"
+        "🟦 *Семейная*: до 8 пользователей, до 3 устройств каждому\n\n"
+        "Выбери тариф ниже 👇"
     )
 
 
-def text_subscription_card(user: Message | CallbackQuery, sub: Optional[dict]):
-    # делаем “как у сервисных ботов” — с код-блоками (там будет кнопка копирования)
-    from_user = user.from_user if isinstance(user, (Message,)) else user.from_user
-    name = (from_user.first_name or "—").strip()
-    uid = from_user.id
+def text_subscription_card(user_obj, sub: Optional[dict]):
+    u = user_obj.from_user
+    name = (u.first_name or "—").strip()
+    uid = u.id
 
     if not sub:
         return (
@@ -317,14 +309,14 @@ def text_subscription_card(user: Message | CallbackQuery, sub: Optional[dict]):
             f"Имя: {name}\n"
             f"ID: {uid}\n"
             "```\n\n"
-            "🔗 *Ваша подписка:*\n"
+            "🔗 *Подписка:*\n"
             "```text\n"
             "Нет активной подписки\n"
             "```\n\n"
             "Нажми *Купить подписку* 👇"
         )
 
-    plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
+    plan_name, user_line, devices_line, _users, _amount = plan_meta(sub["plan"])
     key = sub.get("issued_key") or "—"
 
     return (
@@ -339,11 +331,11 @@ def text_subscription_card(user: Message | CallbackQuery, sub: Optional[dict]):
         "```\n\n"
         "📄 *Информация о тарифе:*\n"
         "```text\n"
-        f"Тариф: {plan_name} • ♾️ Навсегда\n"
-        f"Условия: {conditions}\n"
-        f"Лимит устройств: {device_limit}\n"
+        f"Тариф: {plan_name} • Навсегда\n"
+        f"{user_line}\n"
+        f"{devices_line}\n"
         "```\n\n"
-        "👇 Используй кнопки ниже для подключения и сервисов"
+        "👇 Используй кнопки ниже для подключения"
     )
 
 
@@ -353,26 +345,29 @@ dp = Dispatcher()
 
 
 async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
-    # Если есть banner.jpg — шлём фото с подписью, иначе текст
+    """
+    Если banner.jpg найден рядом с vpn_bot.py — шлём фото.
+    Иначе — обычный текст.
+    """
     try:
-        if BANNER_PATH and os.path.exists(BANNER_PATH):
-            with open(BANNER_PATH, "rb") as f:
-                await bot.send_photo(chat_id, f, caption=text, reply_markup=reply_markup)
+        if os.path.exists(BANNER_PATH):
+            await bot.send_photo(
+                chat_id,
+                FSInputFile(BANNER_PATH),
+                caption=text,
+                reply_markup=reply_markup
+            )
         else:
+            print("BANNER NOT FOUND:", BANNER_PATH)
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
-    except Exception:
-        # запасной вариант
+    except Exception as e:
+        print("BANNER SEND ERROR:", repr(e))
         await bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 @dp.message(CommandStart())
 async def start(m: Message):
-    await send_banner_or_text(
-        m.chat.id,
-        text_menu(),
-        reply_markup=kb_main()
-    )
-    # нижняя клавиатура
+    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main())
     await m.answer("✅ Меню доступно.", reply_markup=kb_reply_menu())
 
 
@@ -448,14 +443,15 @@ async def buy(call: CallbackQuery):
         return
 
     plan = call.data.split(":")[1]
-    plan_name, conditions, _device_limit, amount = plan_meta(plan)
+    plan_name, user_line, devices_line, _users, amount = plan_meta(plan)
 
     order_id = db_create_order(user_id, username, plan, amount)
 
     msg = await call.message.answer(
         f"🧾 *Заказ #{order_id}*\n\n"
         f"📦 Тариф: *{plan_name}*\n"
-        f"{conditions}\n"
+        f"{user_line}\n"
+        f"{devices_line}\n"
         f"💰 Сумма: *{amount}₽*\n\n"
         f"{PAYMENT_TEXT}\n\n"
         "📎 *Отправь чек/скрин сюда в чат* (фото/файл/текст).",
@@ -491,11 +487,7 @@ async def cancel_order(call: CallbackQuery):
         except Exception:
             pass
 
-    await bot.send_message(
-        user_id,
-        "✅ Заказ отменён.\n"
-        "Если передумаешь — открой меню и оформи заново."
-    )
+    await bot.send_message(user_id, "✅ Заказ отменён.\nЕсли передумаешь — открой меню и оформи заново.")
     await call.answer("Отменено")
 
 
@@ -515,18 +507,18 @@ async def receipt(m: Message):
 
     safe_username = username or "—"
 
-    # сначала пробуем отправить админу
+    # сначала пробуем отправить админу (если не отправилось — не меняем статус)
     try:
         await bot.send_message(
             ADMIN_ID,
-            "🔔 Новый чек на проверку\n\n"
+            "🔔 Чек на проверку\n\n"
             f"🧾 Заказ: #{active['id']}\n"
             f"👤 Пользователь: {user_id} (@{safe_username})\n"
             f"📦 Тариф: {active['plan']}\n"
             f"💰 Сумма: {active['amount']}₽\n\n"
             "Принять оплату?",
             reply_markup=kb_admin(active["id"]),
-            parse_mode=None,
+            parse_mode=None
         )
     except Exception as e:
         print("ADMIN SEND ERROR:", repr(e))
@@ -535,7 +527,7 @@ async def receipt(m: Message):
 
     db_set_status(active["id"], "pending_admin")
 
-    # копия чека админу
+    # чек админу (копия)
     try:
         await m.copy_to(ADMIN_ID)
     except Exception as e:
@@ -545,21 +537,21 @@ async def receipt(m: Message):
 
 
 async def send_key_to_user(user_id: int, plan: str, key: str):
-    plan_name, conditions, _device_limit, _amount = plan_meta(plan)
+    plan_name, user_line, devices_line, _users, _amount = plan_meta(plan)
     await bot.send_message(
         user_id,
         "✅ *Оплата подтверждена!*\n\n"
         f"📦 Тариф: *{plan_name}* • ♾️ *Навсегда*\n"
-        f"{conditions}\n\n"
-        "🔗 *Твой ключ (скопируй):*\n"
-        "```text\n"
-        f"{key}\n"
-        "```\n\n"
+        f"{user_line}\n"
+        f"{devices_line}\n\n"
+        "🔑 *Твой ключ (скопируй):*\n"
+        f"`{key}`\n\n"
         "📲 *Как подключиться (Happ):*\n"
         "1) Скачай Happ (кнопки ниже)\n"
         "2) Открой приложение\n"
         "3) Нажми «Добавить / Import / Подписка»\n"
         "4) Вставь ключ\n\n"
+        "🌍 Появятся сервера — выбирай любой и подключайся.\n\n"
         "🔒 Вступи в приватную группу (для обслуживания).\n"
         "⭐ Оставь отзыв — буду благодарен 🙏",
         reply_markup=kb_after_issue()
@@ -580,16 +572,16 @@ async def admin(call: CallbackQuery):
         await call.answer("Заказ не найден", show_alert=True)
         return
 
-    # если уже решён — запрещаем повтор
+    # если уже решён — не даём повторно
     if order["status"] in ("accepted", "rejected", "cancelled"):
         await call.answer("Уже решено", show_alert=True)
         try:
-            await call.message.edit_reply_markup(reply_markup=None)  # на всякий случай
+            await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
         return
 
-    # ✅ сразу убираем кнопки у админа после нажатия
+    # ✅ убираем кнопки после нажатия
     try:
         await call.message.edit_reply_markup(reply_markup=None)
     except Exception:
@@ -653,4 +645,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
