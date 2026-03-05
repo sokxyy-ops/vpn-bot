@@ -4,21 +4,20 @@ import time
 import sqlite3
 from typing import Optional, List, Tuple, Dict, Any, Callable, Awaitable
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton,
     FSInputFile
 )
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram import BaseMiddleware
 
 
 # ================== ENV ==================
@@ -67,9 +66,9 @@ dp = Dispatcher(storage=MemoryStorage())
 # ================== FSM ==================
 class AdminStates(StatesGroup):
     broadcast_wait = State()
-    price_wait = State()   # ждём число
-    keys_wait = State()    # ждём список ключей
-    search_wait = State()  # ждём запрос
+    price_wait = State()
+    keys_wait = State()
+    search_wait = State()
 
 
 # ================== DB ==================
@@ -108,7 +107,7 @@ def db_init():
             username TEXT,
             plan TEXT NOT NULL,
             amount INTEGER NOT NULL,
-            status TEXT NOT NULL,         -- waiting_receipt / pending_admin / accepted / rejected / cancelled
+            status TEXT NOT NULL,
             created_at INTEGER NOT NULL
         )
     """)
@@ -148,7 +147,7 @@ def db_init():
     _ensure_table(con, """
         CREATE TABLE IF NOT EXISTS keys_store (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            plan TEXT NOT NULL,          -- standard/family
+            plan TEXT NOT NULL,
             key TEXT NOT NULL,
             used INTEGER DEFAULT 0,
             used_at INTEGER,
@@ -215,6 +214,29 @@ def db_list_users_for_broadcast() -> List[int]:
         cur = con.cursor()
         cur.execute("SELECT user_id FROM users WHERE COALESCE(is_blocked,0)=0")
         return [r[0] for r in cur.fetchall()]
+    finally:
+        con.close()
+
+def db_users_stats() -> Dict[str, int]:
+    now = int(time.time())
+    day_ago = now - 24 * 3600
+    week_ago = now - 7 * 24 * 3600
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        total = int(cur.fetchone()[0] or 0)
+
+        cur.execute("SELECT COUNT(*) FROM users WHERE COALESCE(is_blocked,0)=1")
+        blocked = int(cur.fetchone()[0] or 0)
+
+        cur.execute("SELECT COUNT(*) FROM users WHERE last_seen>=?", (day_ago,))
+        active_day = int(cur.fetchone()[0] or 0)
+
+        cur.execute("SELECT COUNT(*) FROM users WHERE last_seen>=?", (week_ago,))
+        active_week = int(cur.fetchone()[0] or 0)
+
+        return {"total": total, "blocked": blocked, "active_day": active_day, "active_week": active_week}
     finally:
         con.close()
 
@@ -391,11 +413,8 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
     try:
         cur = con.cursor()
 
-        # order_id или user_id
         if q.isdigit():
             num = int(q)
-
-            # пробуем как order_id
             cur.execute("""
                 SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
                 FROM orders
@@ -406,7 +425,6 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
             if r:
                 return r
 
-            # иначе как user_id
             cur.execute("""
                 SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
                 FROM orders
@@ -419,7 +437,6 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
         if q.startswith("@"):
             q = q[1:]
 
-        # точный username
         cur.execute("""
             SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
             FROM orders
@@ -431,7 +448,6 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
         if rows:
             return rows
 
-        # частичный username
         cur.execute("""
             SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
             FROM orders
@@ -463,7 +479,11 @@ def db_keys_add(plan: str, keys: List[str]) -> Tuple[int, int]:
             k = k.strip()
             if not k:
                 continue
-            cur.execute("INSERT OR IGNORE INTO keys_store(plan, key, used, used_at, order_id) VALUES(?,?,0,NULL,NULL)", (plan, k))
+            cur.execute(
+                "INSERT OR IGNORE INTO keys_store(plan, key, used, used_at, order_id) "
+                "VALUES(?,?,0,NULL,NULL)",
+                (plan, k)
+            )
             if cur.rowcount == 1:
                 added += 1
             else:
@@ -486,12 +506,20 @@ def take_key(plan: str, order_id: int) -> Optional[str]:
     con = db()
     try:
         cur = con.cursor()
-        cur.execute("SELECT id, key FROM keys_store WHERE plan=? AND COALESCE(used,0)=0 ORDER BY id ASC LIMIT 1", (plan,))
+        cur.execute(
+            "SELECT id, key FROM keys_store "
+            "WHERE plan=? AND COALESCE(used,0)=0 "
+            "ORDER BY id ASC LIMIT 1",
+            (plan,)
+        )
         row = cur.fetchone()
         if not row:
             return None
         kid, key = row[0], row[1]
-        cur.execute("UPDATE keys_store SET used=1, used_at=?, order_id=? WHERE id=?", (int(time.time()), order_id, kid))
+        cur.execute(
+            "UPDATE keys_store SET used=1, used_at=?, order_id=? WHERE id=?",
+            (int(time.time()), order_id, kid)
+        )
         con.commit()
         return key
     finally:
@@ -641,6 +669,7 @@ def kb_admin_menu():
          InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🏷 Цены", callback_data="admin:prices"),
          InlineKeyboardButton(text="🔑 Ключи", callback_data="admin:keys")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
     ])
 
 def kb_admin_list(rows):
@@ -683,7 +712,7 @@ def kb_confirm_clear(plan: str):
     ])
 
 
-# ================== MIDDLEWARE (трек пользователей БЕЗ ломания /start) ==================
+# ================== MIDDLEWARE: TRACK USERS ==================
 class TrackUserMiddleware(BaseMiddleware):
     async def __call__(
         self,
@@ -898,16 +927,20 @@ async def resend_to_admin(call: CallbackQuery):
             pass
 
 
-# ================== RECEIPT ==================
-@dp.message(F.content_type.in_({"photo", "document", "text"}))
+# ================== RECEIPT (важно: не мешает FSM) ==================
+@dp.message(StateFilter(None), F.content_type.in_({"photo", "document", "text"}))
 async def receipt(m: Message):
-    # Важно: /start и /admin обработаются выше, потому что они Command handlers
+    # админские сообщения не трогаем
+    if m.from_user and m.from_user.id == ADMIN_ID:
+        return
+
     user_id = m.from_user.id
     username = m.from_user.username
 
     active = db_get_active_order(user_id)
     if not active:
-        return  # просто молча, чтобы не мешать обычным сообщениям
+        await m.answer("⚠️ Нет активного заказа. Открой /start и выбери тариф.")
+        return
 
     if active["status"] == "pending_admin":
         await m.answer(
@@ -961,6 +994,22 @@ async def admin_home(call: CallbackQuery):
         await call.answer("Нет доступа", show_alert=True)
         return
     await call.message.answer("🛠 *Админ-панель*\nВыбери раздел 👇", reply_markup=kb_admin_menu())
+    await call.answer()
+
+@dp.callback_query(F.data == "admin:users")
+async def admin_users(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+    s = db_users_stats()
+    await call.message.answer(
+        "👥 *Пользователи*\n\n"
+        f"👤 Всего в базе: *{s['total']}*\n"
+        f"🟢 Активны за 24ч: *{s['active_day']}*\n"
+        f"🟡 Активны за 7д: *{s['active_week']}*\n\n"
+        f"🚫 Заблокировали бота: *{s['blocked']}*",
+        reply_markup=kb_admin_menu()
+    )
     await call.answer()
 
 @dp.callback_query(F.data == "admin:list")
