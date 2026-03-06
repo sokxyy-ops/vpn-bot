@@ -49,14 +49,13 @@ PAYMENT_TEXT = (
     "Я проверю — бот выдаст ключ 🔑"
 )
 
-# ================== KEY FILES (для первого импорта) ==================
+# ================== LEGACY KEY FILES ==================
 STANDARD_KEYS_FILE = os.path.join(BASE_DIR, "standard_keys.txt")
 FAMILY_KEYS_FILE = os.path.join(BASE_DIR, "family_keys.txt")
 
 # ================== RESEND LIMITS ==================
-RESEND_COOLDOWN_SEC = 10 * 60   # 10 минут
-RESEND_MAX = 3                 # максимум 3 пересылки на заказ
-
+RESEND_COOLDOWN_SEC = 10 * 60
+RESEND_MAX = 3
 
 # ================== BOT ==================
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
@@ -99,7 +98,6 @@ def db_init():
     con = db()
     cur = con.cursor()
 
-    # orders
     cur.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,7 +112,6 @@ def db_init():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_user_status ON orders(user_id, status)")
     con.commit()
 
-    # migrations
     _add_column_if_missing(con, "orders", "payment_msg_id", "ALTER TABLE orders ADD COLUMN payment_msg_id INTEGER")
     _add_column_if_missing(con, "orders", "issued_key", "ALTER TABLE orders ADD COLUMN issued_key TEXT")
     _add_column_if_missing(con, "orders", "accepted_at", "ALTER TABLE orders ADD COLUMN accepted_at INTEGER")
@@ -122,7 +119,6 @@ def db_init():
     _add_column_if_missing(con, "orders", "resend_count", "ALTER TABLE orders ADD COLUMN resend_count INTEGER DEFAULT 0")
     _add_column_if_missing(con, "orders", "last_resend_at", "ALTER TABLE orders ADD COLUMN last_resend_at INTEGER DEFAULT 0")
 
-    # users
     _ensure_table(con, """
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -133,7 +129,6 @@ def db_init():
         )
     """)
 
-    # settings
     _ensure_table(con, """
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -143,7 +138,6 @@ def db_init():
     _settings_set_if_missing(con, "price_standard", "200")
     _settings_set_if_missing(con, "price_family", "310")
 
-    # keys storage
     _ensure_table(con, """
         CREATE TABLE IF NOT EXISTS keys_store (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,9 +149,7 @@ def db_init():
         )
     """)
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_keys_unique ON keys_store(plan, key)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_keys_used ON keys_store(plan, used)")
     con.commit()
-
     con.close()
 
 def db_settings_get(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -221,9 +213,11 @@ def db_users_stats() -> Dict[str, int]:
     now = int(time.time())
     day_ago = now - 24 * 3600
     week_ago = now - 7 * 24 * 3600
+
     con = db()
     try:
         cur = con.cursor()
+
         cur.execute("SELECT COUNT(*) FROM users")
         total = int(cur.fetchone()[0] or 0)
 
@@ -236,7 +230,12 @@ def db_users_stats() -> Dict[str, int]:
         cur.execute("SELECT COUNT(*) FROM users WHERE last_seen>=?", (week_ago,))
         active_week = int(cur.fetchone()[0] or 0)
 
-        return {"total": total, "blocked": blocked, "active_day": active_day, "active_week": active_week}
+        return {
+            "total": total,
+            "blocked": blocked,
+            "active_day": active_day,
+            "active_week": active_week,
+        }
     finally:
         con.close()
 
@@ -254,21 +253,30 @@ def db_get_active_order(user_id: int):
     if not row:
         return None
     return {
-        "id": row[0], "plan": row[1], "amount": row[2], "status": row[3],
-        "payment_msg_id": row[4], "admin_msg_id": row[5],
-        "resend_count": row[6] or 0, "last_resend_at": row[7] or 0
+        "id": row[0],
+        "plan": row[1],
+        "amount": row[2],
+        "status": row[3],
+        "payment_msg_id": row[4],
+        "admin_msg_id": row[5],
+        "resend_count": row[6] or 0,
+        "last_resend_at": row[7] or 0,
     }
 
 def db_create_order(user_id: int, username: Optional[str], plan: str, amount: int):
     con = db()
     cur = con.cursor()
     cur.execute("""
-        INSERT INTO orders(user_id, username, plan, amount, status, created_at,
-                           payment_msg_id, issued_key, accepted_at, admin_msg_id,
-                           resend_count, last_resend_at)
+        INSERT INTO orders(
+            user_id, username, plan, amount, status, created_at,
+            payment_msg_id, issued_key, accepted_at, admin_msg_id,
+            resend_count, last_resend_at
+        )
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (user_id, username or "", plan, amount, "waiting_receipt", int(time.time()),
-          None, None, None, None, 0, 0))
+    """, (
+        user_id, username or "", plan, amount, "waiting_receipt", int(time.time()),
+        None, None, None, None, 0, 0
+    ))
     con.commit()
     order_id = cur.lastrowid
     con.close()
@@ -316,10 +324,18 @@ def db_get_order(order_id: int):
     if not row:
         return None
     return {
-        "id": row[0], "user_id": row[1], "username": row[2], "plan": row[3],
-        "amount": row[4], "status": row[5], "payment_msg_id": row[6],
-        "issued_key": row[7], "accepted_at": row[8], "admin_msg_id": row[9],
-        "resend_count": row[10] or 0, "last_resend_at": row[11] or 0,
+        "id": row[0],
+        "user_id": row[1],
+        "username": row[2],
+        "plan": row[3],
+        "amount": row[4],
+        "status": row[5],
+        "payment_msg_id": row[6],
+        "issued_key": row[7],
+        "accepted_at": row[8],
+        "admin_msg_id": row[9],
+        "resend_count": row[10] or 0,
+        "last_resend_at": row[11] or 0,
         "created_at": row[12],
     }
 
@@ -336,7 +352,13 @@ def db_get_last_accepted(user_id: int):
     con.close()
     if not row:
         return None
-    return {"id": row[0], "plan": row[1], "amount": row[2], "issued_key": row[3], "accepted_at": row[4]}
+    return {
+        "id": row[0],
+        "plan": row[1],
+        "amount": row[2],
+        "issued_key": row[3],
+        "accepted_at": row[4],
+    }
 
 def db_list_pending(limit: int = 20):
     con = db()
@@ -356,8 +378,10 @@ def db_can_resend(order_id: int):
     order = db_get_order(order_id)
     if not order:
         return False, "Заказ не найден"
+
     if order["status"] not in ("waiting_receipt", "pending_admin"):
         return False, "Этот заказ уже закрыт"
+
     if order["resend_count"] >= RESEND_MAX:
         return False, f"Лимит пересылок достигнут ({RESEND_MAX})"
 
@@ -367,6 +391,7 @@ def db_can_resend(order_id: int):
         left = RESEND_COOLDOWN_SEC - (now - last)
         mins = max(1, left // 60)
         return False, f"Подожди ещё ~{mins} мин"
+
     return True, "OK"
 
 def db_mark_resend(order_id: int):
@@ -409,21 +434,30 @@ def db_profit_totals() -> Dict[str, int]:
 
 def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
     q = (query or "").strip()
+    if not q:
+        return []
+
+    if q.startswith("#"):
+        q = q[1:].strip()
+
+    username_query = q[1:].strip() if q.startswith("@") else q
+
     con = db()
     try:
         cur = con.cursor()
 
         if q.isdigit():
             num = int(q)
+
             cur.execute("""
                 SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
                 FROM orders
                 WHERE id=?
                 LIMIT 1
             """, (num,))
-            r = cur.fetchall()
-            if r:
-                return r
+            rows = cur.fetchall()
+            if rows:
+                return rows
 
             cur.execute("""
                 SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
@@ -432,18 +466,17 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
                 ORDER BY id DESC
                 LIMIT ?
             """, (num, limit))
-            return cur.fetchall()
-
-        if q.startswith("@"):
-            q = q[1:]
+            rows = cur.fetchall()
+            if rows:
+                return rows
 
         cur.execute("""
             SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
             FROM orders
-            WHERE LOWER(username)=LOWER(?)
+            WHERE LOWER(COALESCE(username, '')) = LOWER(?)
             ORDER BY id DESC
             LIMIT ?
-        """, (q, limit))
+        """, (username_query, limit))
         rows = cur.fetchall()
         if rows:
             return rows
@@ -451,21 +484,32 @@ def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
         cur.execute("""
             SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
             FROM orders
-            WHERE LOWER(username) LIKE LOWER(?)
+            WHERE LOWER(COALESCE(username, '')) LIKE LOWER(?)
             ORDER BY id DESC
             LIMIT ?
-        """, (f"%{q}%", limit))
+        """, (f"%{username_query}%", limit))
+        rows = cur.fetchall()
+        if rows:
+            return rows
+
+        cur.execute("""
+            SELECT id, user_id, username, plan, amount, status, created_at, accepted_at
+            FROM orders
+            WHERE LOWER(plan) LIKE LOWER(?) OR LOWER(status) LIKE LOWER(?)
+            ORDER BY id DESC
+            LIMIT ?
+        """, (f"%{q}%", f"%{q}%", limit))
         return cur.fetchall()
     finally:
         con.close()
 
 
-# ================== KEYS (DB) ==================
+# ================== KEYS ==================
 def db_keys_count(plan: str) -> int:
     con = db()
     try:
         cur = con.cursor()
-        cur.execute("SELECT COUNT(*) FROM keys_store WHERE plan=? AND COALESCE(used,0)=0", (plan,))
+        cur.execute("SELECT COUNT(*) FROM keys_store WHERE plan=?", (plan,))
         return int(cur.fetchone()[0] or 0)
     finally:
         con.close()
@@ -480,8 +524,7 @@ def db_keys_add(plan: str, keys: List[str]) -> Tuple[int, int]:
             if not k:
                 continue
             cur.execute(
-                "INSERT OR IGNORE INTO keys_store(plan, key, used, used_at, order_id) "
-                "VALUES(?,?,0,NULL,NULL)",
+                "INSERT OR IGNORE INTO keys_store(plan, key, used, used_at, order_id) VALUES(?,?,0,NULL,NULL)",
                 (plan, k)
             )
             if cur.rowcount == 1:
@@ -502,26 +545,19 @@ def db_keys_clear(plan: str):
     finally:
         con.close()
 
-def take_key(plan: str, order_id: int) -> Optional[str]:
+def take_key(plan: str, order_id: int = 0) -> Optional[str]:
+    """
+    Ключ НЕ помечается как использованный.
+    Всегда выдается первый ключ тарифа.
+    """
     con = db()
     try:
         cur = con.cursor()
-        cur.execute(
-            "SELECT id, key FROM keys_store "
-            "WHERE plan=? AND COALESCE(used,0)=0 "
-            "ORDER BY id ASC LIMIT 1",
-            (plan,)
-        )
+        cur.execute("SELECT key FROM keys_store WHERE plan=? ORDER BY id ASC LIMIT 1", (plan,))
         row = cur.fetchone()
         if not row:
             return None
-        kid, key = row[0], row[1]
-        cur.execute(
-            "UPDATE keys_store SET used=1, used_at=?, order_id=? WHERE id=?",
-            (int(time.time()), order_id, kid)
-        )
-        con.commit()
-        return key
+        return row[0]
     finally:
         con.close()
 
@@ -546,6 +582,7 @@ def import_keys_from_files_if_empty():
 def plan_meta(plan: str):
     price_standard = int(db_settings_get("price_standard", "200") or 200)
     price_family = int(db_settings_get("price_family", "310") or 310)
+
     if plan == "standard":
         return "🟩 Стандарт", "👤 1 пользователь • 📱 до 3 устройств", "3", price_standard
     return "🟦 Семейная", "👥 до 8 пользователей • 📱 до 3 устройств каждому", "3", price_family
@@ -587,6 +624,7 @@ def text_subscription_card(from_user, sub: Optional[dict]):
 
     plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
     key = sub["issued_key"]
+
     return (
         "👤 *Профиль:*\n"
         f"> Имя: {name}\n"
@@ -680,8 +718,10 @@ def kb_admin_list(rows):
             text=f"🧾 #{oid} • {plan} • {amount}₽ • {u}",
             callback_data=f"admin:view:{oid}"
         )])
-    keyboard.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:list"),
-                     InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")])
+    keyboard.append([
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:list"),
+        InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")
+    ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def kb_admin_prices():
@@ -697,8 +737,8 @@ def kb_admin_keys():
     s = db_keys_count("standard")
     f = db_keys_count("family")
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"➕ Добавить 🟩 (осталось {s})", callback_data="admin:keys:add:standard")],
-        [InlineKeyboardButton(text=f"➕ Добавить 🟦 (осталось {f})", callback_data="admin:keys:add:family")],
+        [InlineKeyboardButton(text=f"➕ Добавить 🟩 (в базе {s})", callback_data="admin:keys:add:standard")],
+        [InlineKeyboardButton(text=f"➕ Добавить 🟦 (в базе {f})", callback_data="admin:keys:add:family")],
         [InlineKeyboardButton(text="🧹 Очистить 🟩", callback_data="admin:keys:clear:standard"),
          InlineKeyboardButton(text="🧹 Очистить 🟦", callback_data="admin:keys:clear:family")],
         [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
@@ -712,7 +752,7 @@ def kb_confirm_clear(plan: str):
     ])
 
 
-# ================== MIDDLEWARE: TRACK USERS ==================
+# ================== MIDDLEWARE ==================
 class TrackUserMiddleware(BaseMiddleware):
     async def __call__(
         self,
@@ -722,9 +762,19 @@ class TrackUserMiddleware(BaseMiddleware):
     ) -> Any:
         try:
             if isinstance(event, Message) and event.from_user:
-                db_upsert_user(event.from_user.id, event.from_user.username, event.from_user.first_name, int(time.time()))
+                db_upsert_user(
+                    event.from_user.id,
+                    event.from_user.username,
+                    event.from_user.first_name,
+                    int(time.time())
+                )
             elif isinstance(event, CallbackQuery) and event.from_user:
-                db_upsert_user(event.from_user.id, event.from_user.username, event.from_user.first_name, int(time.time()))
+                db_upsert_user(
+                    event.from_user.id,
+                    event.from_user.username,
+                    event.from_user.first_name,
+                    int(time.time())
+                )
         except Exception:
             pass
         return await handler(event, data)
@@ -802,12 +852,15 @@ async def admin_cmd(m: Message):
 async def menu_router(call: CallbackQuery):
     try:
         action = call.data.split(":", 1)[1]
+
         if action == "main":
             await send_banner_or_text(call.message.chat.id, text_menu(), reply_markup=kb_main())
             return
+
         if action == "buy":
             await call.message.answer(text_buy_intro(), reply_markup=kb_buy())
             return
+
         if action == "sub":
             sub = db_get_last_accepted(call.from_user.id)
             if not sub:
@@ -839,7 +892,6 @@ async def buy(call: CallbackQuery):
 
         plan = call.data.split(":", 1)[1]
         plan_name, conditions, _device_limit, amount = plan_meta(plan)
-
         order_id = db_create_order(user_id, username, plan, amount)
 
         msg = await call.message.answer(
@@ -927,10 +979,9 @@ async def resend_to_admin(call: CallbackQuery):
             pass
 
 
-# ================== RECEIPT (важно: не мешает FSM) ==================
+# ================== RECEIPT ==================
 @dp.message(StateFilter(None), F.content_type.in_({"photo", "document", "text"}))
 async def receipt(m: Message):
-    # админские сообщения не трогаем
     if m.from_user and m.from_user.id == ADMIN_ID:
         return
 
@@ -1075,9 +1126,9 @@ async def admin_search(call: CallbackQuery, state: FSMContext):
     await call.message.answer(
         "🔎 *Поиск заказа*\n\n"
         "Отправь сюда:\n"
-        "• номер заказа (например `105`)\n"
-        "• или user_id (например `123456789`)\n"
-        "• или username (например `@sokxyy`)\n\n"
+        "• номер заказа (`#12` или `12`)\n"
+        "• user_id (`123456789`)\n"
+        "• username (`@username`)\n\n"
         "Отмена: `отмена`",
         reply_markup=kb_admin_menu()
     )
@@ -1111,10 +1162,12 @@ async def admin_price_set(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     plan = call.data.split(":")[-1]
     if plan not in ("standard", "family"):
         await call.answer("Ошибка", show_alert=True)
         return
+
     await state.update_data(price_plan=plan)
     await state.set_state(AdminStates.price_wait)
 
@@ -1141,10 +1194,12 @@ async def admin_keys_add(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     plan = call.data.split(":")[-1]
     if plan not in ("standard", "family"):
         await call.answer("Ошибка", show_alert=True)
         return
+
     await state.update_data(keys_plan=plan)
     await state.set_state(AdminStates.keys_wait)
 
@@ -1164,10 +1219,12 @@ async def admin_keys_clear(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     plan = call.data.split(":")[-1]
     if plan not in ("standard", "family"):
         await call.answer("Ошибка", show_alert=True)
         return
+
     await call.message.answer(
         "⚠️ *Очистка ключей*\n"
         "Это удалит *все* ключи этого тарифа.\n\n"
@@ -1181,10 +1238,12 @@ async def admin_keys_clear_yes(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     plan = call.data.split(":")[-1]
     if plan not in ("standard", "family"):
         await call.answer("Ошибка", show_alert=True)
         return
+
     db_keys_clear(plan)
     await call.message.answer("✅ Ключи очищены.", reply_markup=kb_admin_keys())
     await call.answer()
@@ -1240,7 +1299,11 @@ async def admin_decision(call: CallbackQuery):
             await send_key_to_user(order["user_id"], order["plan"], key)
         except TelegramForbiddenError:
             await call.answer("Не могу написать юзеру", show_alert=True)
-            await bot.send_message(ADMIN_ID, f"⚠️ Не смог отправить пользователю {order['user_id']}. Пусть нажмёт /start.", parse_mode=None)
+            await bot.send_message(
+                ADMIN_ID,
+                f"⚠️ Не смог отправить пользователю {order['user_id']}. Пусть нажмёт /start.",
+                parse_mode=None
+            )
             return
         except TelegramBadRequest as e:
             await call.answer("TelegramBadRequest", show_alert=True)
@@ -1262,7 +1325,7 @@ async def admin_decision(call: CallbackQuery):
         await call.answer("Выдано ✅")
 
 
-# ================== FSM INPUTS (АДМИН) ==================
+# ================== FSM INPUTS ==================
 @dp.message(AdminStates.search_wait)
 async def admin_search_input(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
@@ -1270,25 +1333,42 @@ async def admin_search_input(m: Message, state: FSMContext):
         return
 
     txt = (m.text or "").strip()
+    if not txt:
+        await m.answer("Пришли номер заказа, user_id или username.", reply_markup=kb_admin_menu())
+        return
+
     if txt.lower() == "отмена":
         await state.clear()
         await m.answer("❌ Отменено.", reply_markup=kb_admin_menu())
         return
 
-    rows = db_search_orders(txt, limit=10)
+    rows = db_search_orders(txt, limit=15)
     if not rows:
-        await m.answer("Ничего не найдено. Попробуй другой запрос.", reply_markup=kb_admin_menu())
+        await m.answer(
+            "❌ Ничего не найдено.\n\n"
+            "Попробуй так:\n"
+            "• `#12`\n"
+            "• `12`\n"
+            "• `@username`\n"
+            "• `123456789`",
+            reply_markup=kb_admin_menu()
+        )
         return
 
     out = ["🔎 *Результаты поиска:*"]
     for (oid, uid, uname, plan, amount, status, created_at, accepted_at) in rows:
-        u = f"@{uname}" if uname else str(uid)
+        username_text = f"@{uname}" if uname else "—"
+        plan_title = "🟩 Стандарт" if plan == "standard" else "🟦 Семейная"
         out.append(
-            f"\n🧾 *#{oid}* • {plan} • *{amount}₽*\n"
-            f"👤 {u} (`{uid}`)\n"
-            f"📌 {status}\n"
-            f"🕒 {fmt_ts(created_at)}"
-            + (f"\n✅ {fmt_ts(accepted_at)}" if accepted_at else "")
+            f"\n━━━━━━━━━━\n"
+            f"🧾 *Заказ #{oid}*\n"
+            f"👤 User ID: `{uid}`\n"
+            f"🔹 Username: {username_text}\n"
+            f"📦 Тариф: {plan_title}\n"
+            f"💰 Сумма: *{amount}₽*\n"
+            f"📌 Статус: *{status}*\n"
+            f"🕒 Создан: {fmt_ts(created_at)}\n"
+            f"✅ Принят: {fmt_ts(accepted_at) if accepted_at else '—'}"
         )
 
     await m.answer("\n".join(out), reply_markup=kb_admin_menu())
@@ -1318,7 +1398,7 @@ async def admin_price_input(m: Message, state: FSMContext):
         return
 
     price = int(txt)
-    if price < 1 or price > 1000000:
+    if price < 1 or price > 1_000_000:
         await m.answer("Цена странная 😄 Пришли норм число.", reply_markup=kb_admin_menu())
         return
 
@@ -1356,14 +1436,14 @@ async def admin_keys_input(m: Message, state: FSMContext):
 
     added, skipped = db_keys_add(plan, keys)
     title = "🟩 Стандарт" if plan == "standard" else "🟦 Семейная"
-    left = db_keys_count(plan)
+    count_all = db_keys_count(plan)
 
     await state.clear()
     await m.answer(
         f"✅ Ключи добавлены ({title})\n\n"
         f"➕ Добавлено: *{added}*\n"
         f"⏭ Пропущено (дубли): *{skipped}*\n"
-        f"📦 Осталось свободных: *{left}*",
+        f"📦 Всего ключей в базе: *{count_all}*",
         reply_markup=kb_admin_keys()
     )
 
