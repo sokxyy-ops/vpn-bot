@@ -44,7 +44,7 @@ PAYMENT_TEXT = (
     "✅ *Карта:*\n"
     "`2204320913014587`\n\n"
     "🔁 *Если есть комиссия — переводи через Ozon по номеру:*\n"
-    "`+79951253391 Указать свой юз тг в переводе!!!`\n\n"
+    "`+79951253391`\n\n"
     "📎 После оплаты отправь сюда *чек / скрин*.\n"
     "Я проверю — бот выдаст ключ 🔑"
 )
@@ -283,10 +283,6 @@ def db_ban_user_and_revoke(user_id: int):
 
 
 def db_unban_user(user_id: int):
-    """
-    После разбана подписки не возвращаются.
-    revoked остаются revoked, accepted не восстанавливаются.
-    """
     con = db()
     try:
         cur = con.cursor()
@@ -989,7 +985,7 @@ def kb_admin_decision(order_id: int):
          InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin:no:{order_id}")]
     ]
     if order:
-        keyboard.append([InlineKeyboardButton(text="⛔ Бан", callback_data=f"admin:ban:{order['user_id']}")])
+        keyboard.append([InlineKeyboardButton(text="⛔ Бан", callback_data=f"admin:ban:{order['user_id']}:users:0")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
@@ -1226,17 +1222,22 @@ async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
 
 
 async def send_check_to_admin(order_id: int, user_id: int, username: Optional[str], plan: str, amount: int):
-    safe_username = username or "—"
+    safe_username = f"@{username}" if username else "—"
+
+    text = (
+        "🔔 Чек на проверку\n\n"
+        f"🧾 Заказ: #{order_id}\n"
+        f"👤 Пользователь: {user_id} ({safe_username})\n"
+        f"📦 Тариф: {plan}\n"
+        f"💰 Сумма: {amount}₽\n\n"
+        "Принять оплату?"
+    )
+
     msg = await bot.send_message(
         ADMIN_ID,
-        "🔔 *Чек на проверку*\n\n"
-        f"🧾 Заказ: *#{order_id}*\n"
-        f"👤 Пользователь: `{user_id}` (@{safe_username})\n"
-        f"📦 Тариф: *{plan}*\n"
-        f"💰 Сумма: *{amount}₽*\n\n"
-        "Принять оплату?",
+        text,
         reply_markup=kb_admin_decision(order_id),
-        parse_mode="Markdown",
+        parse_mode=None,
     )
     db_set_admin_msg(order_id, msg.message_id)
     return msg
@@ -1678,16 +1679,19 @@ async def admin_view(call: CallbackQuery):
         await call.answer("Заказ не найден", show_alert=True)
         return
 
+    safe_username = f"@{order['username']}" if order["username"] else "—"
+
     await call.message.answer(
-        "🧾 *Заказ для решения*\n\n"
-        f"🧾 Заказ: *#{order['id']}*\n"
-        f"👤 User: `{order['user_id']}` (@{order['username'] or '—'})\n"
-        f"📦 План: *{order['plan']}*\n"
-        f"💰 Сумма: *{order['amount']}₽*\n"
-        f"📌 Статус: *{order['status']}*\n"
+        "🧾 Заказ для решения\n\n"
+        f"🧾 Заказ: #{order['id']}\n"
+        f"👤 User: {order['user_id']} ({safe_username})\n"
+        f"📦 План: {order['plan']}\n"
+        f"💰 Сумма: {order['amount']}₽\n"
+        f"📌 Статус: {order['status']}\n"
         f"🕒 Создан: {fmt_ts(order['created_at'])}\n\n"
         "Выбери действие:",
-        reply_markup=kb_admin_decision(order_id)
+        reply_markup=kb_admin_decision(order_id),
+        parse_mode=None
     )
     await call.answer()
 
@@ -2274,4 +2278,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
