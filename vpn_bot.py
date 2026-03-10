@@ -74,6 +74,7 @@ class AdminStates(StatesGroup):
 def db():
     return sqlite3.connect(DB_PATH)
 
+
 def _add_column_if_missing(con: sqlite3.Connection, table: str, col: str, ddl: str):
     cur = con.cursor()
     cur.execute(f"PRAGMA table_info({table})")
@@ -82,10 +83,12 @@ def _add_column_if_missing(con: sqlite3.Connection, table: str, col: str, ddl: s
         cur.execute(ddl)
         con.commit()
 
+
 def _ensure_table(con: sqlite3.Connection, ddl: str):
     cur = con.cursor()
     cur.execute(ddl)
     con.commit()
+
 
 def _settings_set_if_missing(con: sqlite3.Connection, key: str, value: str):
     cur = con.cursor()
@@ -93,6 +96,7 @@ def _settings_set_if_missing(con: sqlite3.Connection, key: str, value: str):
     if not cur.fetchone():
         cur.execute("INSERT INTO settings(key,value) VALUES(?,?)", (key, value))
         con.commit()
+
 
 def db_init():
     con = db()
@@ -152,6 +156,7 @@ def db_init():
     con.commit()
     con.close()
 
+
 def db_settings_get(key: str, default: Optional[str] = None) -> Optional[str]:
     con = db()
     try:
@@ -161,6 +166,7 @@ def db_settings_get(key: str, default: Optional[str] = None) -> Optional[str]:
         return row[0] if row else default
     finally:
         con.close()
+
 
 def db_settings_set(key: str, value: str):
     con = db()
@@ -174,6 +180,7 @@ def db_settings_set(key: str, value: str):
         con.commit()
     finally:
         con.close()
+
 
 def db_upsert_user(user_id: int, username: Optional[str], first_name: Optional[str], last_seen: Optional[int] = None):
     con = db()
@@ -191,6 +198,7 @@ def db_upsert_user(user_id: int, username: Optional[str], first_name: Optional[s
     finally:
         con.close()
 
+
 def db_mark_blocked(user_id: int, blocked: bool):
     con = db()
     try:
@@ -200,6 +208,7 @@ def db_mark_blocked(user_id: int, blocked: bool):
     finally:
         con.close()
 
+
 def db_list_users_for_broadcast() -> List[int]:
     con = db()
     try:
@@ -208,6 +217,7 @@ def db_list_users_for_broadcast() -> List[int]:
         return [r[0] for r in cur.fetchall()]
     finally:
         con.close()
+
 
 def db_users_stats() -> Dict[str, int]:
     now = int(time.time())
@@ -239,6 +249,7 @@ def db_users_stats() -> Dict[str, int]:
     finally:
         con.close()
 
+
 def db_get_active_order(user_id: int):
     con = db()
     cur = con.cursor()
@@ -263,6 +274,7 @@ def db_get_active_order(user_id: int):
         "last_resend_at": row[7] or 0,
     }
 
+
 def db_create_order(user_id: int, username: Optional[str], plan: str, amount: int):
     con = db()
     cur = con.cursor()
@@ -282,12 +294,14 @@ def db_create_order(user_id: int, username: Optional[str], plan: str, amount: in
     con.close()
     return order_id
 
+
 def db_set_status(order_id: int, status: str):
     con = db()
     cur = con.cursor()
     cur.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
     con.commit()
     con.close()
+
 
 def db_set_payment_msg(order_id: int, msg_id: Optional[int]):
     con = db()
@@ -296,6 +310,7 @@ def db_set_payment_msg(order_id: int, msg_id: Optional[int]):
     con.commit()
     con.close()
 
+
 def db_set_admin_msg(order_id: int, msg_id: Optional[int]):
     con = db()
     cur = con.cursor()
@@ -303,12 +318,14 @@ def db_set_admin_msg(order_id: int, msg_id: Optional[int]):
     con.commit()
     con.close()
 
+
 def db_set_issued(order_id: int, key: str):
     con = db()
     cur = con.cursor()
     cur.execute("UPDATE orders SET issued_key=?, accepted_at=? WHERE id=?", (key, int(time.time()), order_id))
     con.commit()
     con.close()
+
 
 def db_get_order(order_id: int):
     con = db()
@@ -339,6 +356,7 @@ def db_get_order(order_id: int):
         "created_at": row[12],
     }
 
+
 def db_get_last_accepted(user_id: int):
     con = db()
     cur = con.cursor()
@@ -360,6 +378,52 @@ def db_get_last_accepted(user_id: int):
         "accepted_at": row[4],
     }
 
+
+def db_get_accepted_subscriptions(user_id: int):
+    con = db()
+    cur = con.cursor()
+    cur.execute("""
+        SELECT id, plan, amount, issued_key, accepted_at
+        FROM orders
+        WHERE user_id=? AND status='accepted'
+        ORDER BY accepted_at DESC, id DESC
+    """, (user_id,))
+    rows = cur.fetchall()
+    con.close()
+
+    result = []
+    seen_plans = set()
+
+    for row in rows:
+        plan = row[1]
+        if plan in seen_plans:
+            continue
+        seen_plans.add(plan)
+        result.append({
+            "id": row[0],
+            "plan": row[1],
+            "amount": row[2],
+            "issued_key": row[3],
+            "accepted_at": row[4],
+        })
+    return result
+
+
+def db_update_user_plan_key(user_id: int, plan: str, new_key: str) -> int:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            UPDATE orders
+            SET issued_key=?
+            WHERE user_id=? AND plan=? AND status='accepted'
+        """, (new_key, user_id, plan))
+        con.commit()
+        return cur.rowcount or 0
+    finally:
+        con.close()
+
+
 def db_list_pending(limit: int = 20):
     con = db()
     cur = con.cursor()
@@ -373,6 +437,7 @@ def db_list_pending(limit: int = 20):
     rows = cur.fetchall()
     con.close()
     return rows
+
 
 def db_can_resend(order_id: int):
     order = db_get_order(order_id)
@@ -394,6 +459,7 @@ def db_can_resend(order_id: int):
 
     return True, "OK"
 
+
 def db_mark_resend(order_id: int):
     con = db()
     cur = con.cursor()
@@ -405,6 +471,7 @@ def db_mark_resend(order_id: int):
     """, (int(time.time()), order_id))
     con.commit()
     con.close()
+
 
 def db_profit_totals() -> Dict[str, int]:
     now = int(time.time())
@@ -431,6 +498,7 @@ def db_profit_totals() -> Dict[str, int]:
         return {"total": total, "day": day, "week": week, "month": month}
     finally:
         con.close()
+
 
 def db_search_orders(query: str, limit: int = 10) -> List[Tuple]:
     q = (query or "").strip()
@@ -514,6 +582,7 @@ def db_keys_count(plan: str) -> int:
     finally:
         con.close()
 
+
 def db_keys_add(plan: str, keys: List[str]) -> Tuple[int, int]:
     con = db()
     try:
@@ -536,6 +605,7 @@ def db_keys_add(plan: str, keys: List[str]) -> Tuple[int, int]:
     finally:
         con.close()
 
+
 def db_keys_clear(plan: str):
     con = db()
     try:
@@ -544,6 +614,7 @@ def db_keys_clear(plan: str):
         con.commit()
     finally:
         con.close()
+
 
 def take_key(plan: str, order_id: int = 0) -> Optional[str]:
     """
@@ -560,6 +631,29 @@ def take_key(plan: str, order_id: int = 0) -> Optional[str]:
         return row[0]
     finally:
         con.close()
+
+
+def get_latest_key_for_plan(plan: str) -> Optional[str]:
+    """
+    Берет самый свежий ключ по тарифу.
+    Если ты обновил ключи через админку, юзер после нажатия
+    'Обновить подписку' получит именно актуальный ключ.
+    """
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT key
+            FROM keys_store
+            WHERE plan=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (plan,))
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
 
 def import_keys_from_files_if_empty():
     std = db_keys_count("standard")
@@ -598,6 +692,7 @@ def text_menu():
         "👇 Выбери действие ниже"
     )
 
+
 def text_buy_intro():
     std_price = plan_meta("standard")[3]
     fam_price = plan_meta("family")[3]
@@ -608,35 +703,50 @@ def text_buy_intro():
         "Выбери тариф ниже 👇"
     )
 
-def text_subscription_card(from_user, sub: Optional[dict]):
+
+def text_subscription_card(from_user, subs: Optional[list]):
     name = (from_user.first_name or "—").strip()
     uid = from_user.id
 
-    if not sub or not sub.get("issued_key"):
+    if not subs:
         return (
             "👤 *Профиль:*\n"
             f"> Имя: {name}\n"
             f"> ID: {uid}\n\n"
-            "🔗 *Подписка:*\n"
-            "> Нет активной подписки\n\n"
+            "🔗 *Подписки:*\n"
+            "> Нет активных подписок\n\n"
             "Нажми *Купить подписку* 👇"
         )
 
-    plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
-    key = sub["issued_key"]
+    parts = [
+        "👤 *Профиль:*",
+        f"> Имя: {name}",
+        f"> ID: {uid}",
+        "",
+        "🔗 *Ваши подписки:*",
+    ]
 
-    return (
-        "👤 *Профиль:*\n"
-        f"> Имя: {name}\n"
-        f"> ID: {uid}\n\n"
-        "🔗 *Ваш ключ:*\n"
-        f"> `{key}`\n\n"
-        "📄 *Информация о тарифе:*\n"
-        f"> Тариф: {plan_name} • ♾ Навсегда\n"
-        f"> {conditions}\n"
-        f"> Лимит устройств: {device_limit}\n\n"
+    for idx, sub in enumerate(subs, start=1):
+        plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
+        key = sub.get("issued_key") or "—"
+
+        parts.extend([
+            "",
+            f"*{idx}. {plan_name}*",
+            f"> Ключ: `{key}`",
+            f"> Срок: ♾ Навсегда",
+            f"> {conditions}",
+            f"> Лимит устройств: {device_limit}",
+            f"> Выдано: {fmt_ts(sub.get('accepted_at'))}",
+        ])
+
+    parts.extend([
+        "",
         "👇 Используй кнопки ниже"
-    )
+    ])
+
+    return "\n".join(parts)
+
 
 def fmt_ts(ts: Optional[int]) -> str:
     if not ts:
@@ -648,18 +758,37 @@ def fmt_ts(ts: Optional[int]) -> str:
 
 
 # ================== KEYBOARDS ==================
-def kb_reply_menu():
+def kb_reply_menu(user_id: int):
+    active = db_get_active_order(user_id)
+
+    rows = [
+        [KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")]
+    ]
+
+    if active:
+        rows.append([KeyboardButton(text="❌ Отменить заказ")])
+
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")]],
+        keyboard=rows,
         resize_keyboard=True
     )
 
-def kb_main():
-    return InlineKeyboardMarkup(inline_keyboard=[
+
+def kb_main(user_id: int):
+    active = db_get_active_order(user_id)
+
+    rows = [
         [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")],
         [InlineKeyboardButton(text="🧾 Моя подписка", callback_data="menu:sub")],
-        [InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)],
-    ])
+    ]
+
+    if active:
+        rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
+
+    rows.append([InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def kb_buy():
     std_price = plan_meta("standard")[3]
@@ -670,6 +799,7 @@ def kb_buy():
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
     ])
 
+
 def kb_payment(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel:{order_id}")],
@@ -677,11 +807,13 @@ def kb_payment(order_id: int):
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
     ])
 
+
 def kb_admin_decision(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Принять", callback_data=f"admin:ok:{order_id}"),
          InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin:no:{order_id}")]
     ])
+
 
 def kb_after_issue():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -693,11 +825,37 @@ def kb_after_issue():
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
     ])
 
-def kb_sub_no_sub():
-    return InlineKeyboardMarkup(inline_keyboard=[
+
+def kb_sub_no_sub(user_id: int):
+    rows = [
         [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")],
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
-    ])
+    ]
+
+    active = db_get_active_order(user_id)
+    if active:
+        rows.insert(1, [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_sub_with_refresh(user_id: int):
+    rows = [
+        [InlineKeyboardButton(text="🔄 Обновить подписку", callback_data="sub:refresh")],
+        [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
+        [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
+        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
+        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
+    ]
+
+    active = db_get_active_order(user_id)
+    if active:
+        rows.insert(1, [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def kb_admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -709,6 +867,7 @@ def kb_admin_menu():
          InlineKeyboardButton(text="🔑 Ключи", callback_data="admin:keys")],
         [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
     ])
+
 
 def kb_admin_list(rows):
     keyboard = []
@@ -724,6 +883,7 @@ def kb_admin_list(rows):
     ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def kb_admin_prices():
     std_price = plan_meta("standard")[3]
     fam_price = plan_meta("family")[3]
@@ -732,6 +892,7 @@ def kb_admin_prices():
         [InlineKeyboardButton(text=f"🟦 Семейная: {fam_price}₽", callback_data="admin:price:set:family")],
         [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
     ])
+
 
 def kb_admin_keys():
     s = db_keys_count("standard")
@@ -743,6 +904,7 @@ def kb_admin_keys():
          InlineKeyboardButton(text="🧹 Очистить 🟦", callback_data="admin:keys:clear:family")],
         [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
     ])
+
 
 def kb_confirm_clear(plan: str):
     title = "🟩 Стандарт" if plan == "standard" else "🟦 Семейная"
@@ -779,6 +941,7 @@ class TrackUserMiddleware(BaseMiddleware):
             pass
         return await handler(event, data)
 
+
 dp.message.middleware(TrackUserMiddleware())
 dp.callback_query.middleware(TrackUserMiddleware())
 
@@ -786,6 +949,7 @@ dp.callback_query.middleware(TrackUserMiddleware())
 # ================== HELPERS ==================
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
+
 
 async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
     try:
@@ -795,6 +959,7 @@ async def send_banner_or_text(chat_id: int, text: str, reply_markup=None):
             await bot.send_message(chat_id, text, reply_markup=reply_markup)
     except Exception:
         await bot.send_message(chat_id, text, reply_markup=reply_markup)
+
 
 async def send_check_to_admin(order_id: int, user_id: int, username: Optional[str], plan: str, amount: int):
     safe_username = username or "—"
@@ -813,30 +978,62 @@ async def send_check_to_admin(order_id: int, user_id: int, username: Optional[st
     return msg
 
 
-# ================== START / MENU ==================
-@dp.message(CommandStart())
-async def start(m: Message):
-    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main())
+async def refresh_reply_menu(chat_id: int, user_id: int):
     try:
-        await bot.send_message(m.chat.id, " ", reply_markup=kb_reply_menu())
+        await bot.send_message(chat_id, " ", reply_markup=kb_reply_menu(user_id))
     except Exception:
         pass
 
+
+# ================== START / MENU ==================
+@dp.message(CommandStart())
+async def start(m: Message):
+    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main(m.from_user.id))
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
+
+
 @dp.message(Command("menu"))
 async def cmd_menu(m: Message):
-    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main())
+    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main(m.from_user.id))
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
+
 
 @dp.message(F.text == "📋 Меню")
 async def menu_btn(m: Message):
-    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main())
+    await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main(m.from_user.id))
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
+
 
 @dp.message(F.text == "🧾 Моя подписка")
 async def mysub_btn(m: Message):
-    sub = db_get_last_accepted(m.from_user.id)
-    if not sub:
-        await m.answer(text_subscription_card(m.from_user, None), reply_markup=kb_sub_no_sub())
+    subs = db_get_accepted_subscriptions(m.from_user.id)
+    if not subs:
+        await m.answer(text_subscription_card(m.from_user, None), reply_markup=kb_sub_no_sub(m.from_user.id))
+        await refresh_reply_menu(m.chat.id, m.from_user.id)
         return
-    await m.answer(text_subscription_card(m.from_user, sub), reply_markup=kb_after_issue())
+    await m.answer(text_subscription_card(m.from_user, subs), reply_markup=kb_sub_with_refresh(m.from_user.id))
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
+
+
+@dp.message(F.text == "❌ Отменить заказ")
+async def cancel_order_from_reply(m: Message):
+    active = db_get_active_order(m.from_user.id)
+    if not active:
+        await m.answer("❌ Активного заказа нет.", reply_markup=kb_main(m.from_user.id))
+        await refresh_reply_menu(m.chat.id, m.from_user.id)
+        return
+
+    order_id = active["id"]
+    db_set_status(order_id, "cancelled")
+
+    try:
+        if active.get("payment_msg_id"):
+            await bot.delete_message(chat_id=m.from_user.id, message_id=active["payment_msg_id"])
+    except Exception:
+        pass
+
+    await m.answer("✅ Заказ отменён. Можешь оформить новый через меню.", reply_markup=kb_main(m.from_user.id))
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
 # ================== ADMIN COMMAND ==================
@@ -854,19 +1051,53 @@ async def menu_router(call: CallbackQuery):
         action = call.data.split(":", 1)[1]
 
         if action == "main":
-            await send_banner_or_text(call.message.chat.id, text_menu(), reply_markup=kb_main())
+            await send_banner_or_text(call.message.chat.id, text_menu(), reply_markup=kb_main(call.from_user.id))
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
             return
 
         if action == "buy":
             await call.message.answer(text_buy_intro(), reply_markup=kb_buy())
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
             return
 
         if action == "sub":
-            sub = db_get_last_accepted(call.from_user.id)
-            if not sub:
-                await call.message.answer(text_subscription_card(call.from_user, None), reply_markup=kb_sub_no_sub())
+            subs = db_get_accepted_subscriptions(call.from_user.id)
+            if not subs:
+                await call.message.answer(
+                    text_subscription_card(call.from_user, None),
+                    reply_markup=kb_sub_no_sub(call.from_user.id)
+                )
+                await refresh_reply_menu(call.message.chat.id, call.from_user.id)
                 return
-            await call.message.answer(text_subscription_card(call.from_user, sub), reply_markup=kb_after_issue())
+
+            await call.message.answer(
+                text_subscription_card(call.from_user, subs),
+                reply_markup=kb_sub_with_refresh(call.from_user.id)
+            )
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
+            return
+
+        if action == "cancel_order":
+            active = db_get_active_order(call.from_user.id)
+            if not active:
+                await call.answer("Активного заказа нет", show_alert=True)
+                return
+
+            order_id = active["id"]
+            db_set_status(order_id, "cancelled")
+
+            try:
+                if active.get("payment_msg_id"):
+                    await bot.delete_message(chat_id=call.from_user.id, message_id=active["payment_msg_id"])
+            except Exception:
+                pass
+
+            await bot.send_message(
+                call.from_user.id,
+                "✅ Заказ отменён. Можешь оформить новый через меню.",
+                reply_markup=kb_main(call.from_user.id)
+            )
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
             return
     finally:
         try:
@@ -888,6 +1119,7 @@ async def buy(call: CallbackQuery):
                 f"⏳ У тебя уже есть активный заказ *#{active['id']}*.\n"
                 "Если админ не отвечает — можно *❌ Отменить заказ* или *🔁 Переслать админу* (ограничено)."
             )
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
             return
 
         plan = call.data.split(":", 1)[1]
@@ -904,11 +1136,13 @@ async def buy(call: CallbackQuery):
             reply_markup=kb_payment(order_id)
         )
         db_set_payment_msg(order_id, msg.message_id)
+        await refresh_reply_menu(call.message.chat.id, call.from_user.id)
     finally:
         try:
             await call.answer()
         except Exception:
             pass
+
 
 @dp.callback_query(F.data.startswith("cancel:"))
 async def cancel_order(call: CallbackQuery):
@@ -936,12 +1170,14 @@ async def cancel_order(call: CallbackQuery):
             except Exception:
                 pass
 
-        await bot.send_message(user_id, "✅ Заказ отменён. Можешь оформить новый через меню.")
+        await bot.send_message(user_id, "✅ Заказ отменён. Можешь оформить новый через меню.", reply_markup=kb_main(user_id))
+        await refresh_reply_menu(call.message.chat.id, call.from_user.id)
     finally:
         try:
             await call.answer()
         except Exception:
             pass
+
 
 @dp.callback_query(F.data.startswith("resend:"))
 async def resend_to_admin(call: CallbackQuery):
@@ -971,6 +1207,7 @@ async def resend_to_admin(call: CallbackQuery):
         if order["status"] == "waiting_receipt":
             db_set_status(order_id, "pending_admin")
 
+        await refresh_reply_menu(call.message.chat.id, call.from_user.id)
         await call.answer("✅ Переслал админу", show_alert=True)
     finally:
         try:
@@ -985,12 +1222,16 @@ async def receipt(m: Message):
     if m.from_user and m.from_user.id == ADMIN_ID:
         return
 
+    if (m.text or "").strip() in {"📋 Меню", "🧾 Моя подписка", "❌ Отменить заказ"}:
+        return
+
     user_id = m.from_user.id
     username = m.from_user.username
 
     active = db_get_active_order(user_id)
     if not active:
         await m.answer("⚠️ Нет активного заказа. Открой /start и выбери тариф.")
+        await refresh_reply_menu(m.chat.id, m.from_user.id)
         return
 
     if active["status"] == "pending_admin":
@@ -999,6 +1240,7 @@ async def receipt(m: Message):
             "Если админ не отвечает — можно *❌ Отменить заказ* или *🔁 Переслать админу* (ограничено).",
             reply_markup=kb_payment(active["id"])
         )
+        await refresh_reply_menu(m.chat.id, m.from_user.id)
         return
 
     try:
@@ -1016,6 +1258,7 @@ async def receipt(m: Message):
         print("COPY TO ADMIN ERROR:", repr(e))
 
     await m.answer("✅ Чек отправлен админу. Жди подтверждения ⏳")
+    await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
 # ================== ISSUE KEY ==================
@@ -1038,6 +1281,51 @@ async def send_key_to_user(user_id: int, plan: str, key: str):
     )
 
 
+# ================== SUBSCRIPTION REFRESH ==================
+@dp.callback_query(F.data == "sub:refresh")
+async def refresh_subscription(call: CallbackQuery):
+    try:
+        subs = db_get_accepted_subscriptions(call.from_user.id)
+        if not subs:
+            await call.answer("У тебя нет купленных подписок", show_alert=True)
+            return
+
+        refreshed = []
+        not_found = []
+
+        for sub in subs:
+            plan = sub["plan"]
+            latest_key = get_latest_key_for_plan(plan)
+
+            if not latest_key:
+                not_found.append(plan)
+                continue
+
+            db_update_user_plan_key(call.from_user.id, plan, latest_key)
+            refreshed.append((plan, latest_key))
+
+        subs_updated = db_get_accepted_subscriptions(call.from_user.id)
+
+        text = text_subscription_card(call.from_user, subs_updated)
+
+        if refreshed:
+            text += "\n\n✅ *Подписки обновлены по актуальным ключам.*"
+
+        if not_found:
+            labels = []
+            for p in not_found:
+                labels.append("🟩 Стандарт" if p == "standard" else "🟦 Семейная")
+            text += "\n\n⚠️ Не найден новый ключ для: " + ", ".join(labels)
+
+        await call.message.answer(text, reply_markup=kb_sub_with_refresh(call.from_user.id))
+        await refresh_reply_menu(call.message.chat.id, call.from_user.id)
+    finally:
+        try:
+            await call.answer()
+        except Exception:
+            pass
+
+
 # ================== ADMIN CALLBACKS ==================
 @dp.callback_query(F.data == "admin:home")
 async def admin_home(call: CallbackQuery):
@@ -1046,6 +1334,7 @@ async def admin_home(call: CallbackQuery):
         return
     await call.message.answer("🛠 *Админ-панель*\nВыбери раздел 👇", reply_markup=kb_admin_menu())
     await call.answer()
+
 
 @dp.callback_query(F.data == "admin:users")
 async def admin_users(call: CallbackQuery):
@@ -1063,6 +1352,7 @@ async def admin_users(call: CallbackQuery):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data == "admin:list")
 async def admin_list(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1075,6 +1365,7 @@ async def admin_list(call: CallbackQuery):
         return
     await call.message.answer("📦 *Заказы на проверке:*", reply_markup=kb_admin_list(rows))
     await call.answer()
+
 
 @dp.callback_query(F.data.startswith("admin:view:"))
 async def admin_view(call: CallbackQuery):
@@ -1101,6 +1392,7 @@ async def admin_view(call: CallbackQuery):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data == "admin:profit")
 async def admin_profit(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1116,6 +1408,7 @@ async def admin_profit(call: CallbackQuery):
         reply_markup=kb_admin_menu()
     )
     await call.answer()
+
 
 @dp.callback_query(F.data == "admin:search")
 async def admin_search(call: CallbackQuery, state: FSMContext):
@@ -1134,6 +1427,7 @@ async def admin_search(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data == "admin:broadcast")
 async def admin_broadcast(call: CallbackQuery, state: FSMContext):
     if not is_admin(call.from_user.id):
@@ -1149,6 +1443,7 @@ async def admin_broadcast(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data == "admin:prices")
 async def admin_prices(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1156,6 +1451,7 @@ async def admin_prices(call: CallbackQuery):
         return
     await call.message.answer("🏷 *Цены*\nВыбери что менять:", reply_markup=kb_admin_prices())
     await call.answer()
+
 
 @dp.callback_query(F.data.startswith("admin:price:set:"))
 async def admin_price_set(call: CallbackQuery, state: FSMContext):
@@ -1181,6 +1477,7 @@ async def admin_price_set(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data == "admin:keys")
 async def admin_keys(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1188,6 +1485,7 @@ async def admin_keys(call: CallbackQuery):
         return
     await call.message.answer("🔑 *Ключи*\nУправление ключами:", reply_markup=kb_admin_keys())
     await call.answer()
+
 
 @dp.callback_query(F.data.startswith("admin:keys:add:"))
 async def admin_keys_add(call: CallbackQuery, state: FSMContext):
@@ -1214,6 +1512,7 @@ async def admin_keys_add(call: CallbackQuery, state: FSMContext):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data.startswith("admin:keys:clear:"))
 async def admin_keys_clear(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1233,6 +1532,7 @@ async def admin_keys_clear(call: CallbackQuery):
     )
     await call.answer()
 
+
 @dp.callback_query(F.data.startswith("admin:keys:clear_yes:"))
 async def admin_keys_clear_yes(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1247,6 +1547,7 @@ async def admin_keys_clear_yes(call: CallbackQuery):
     db_keys_clear(plan)
     await call.message.answer("✅ Ключи очищены.", reply_markup=kb_admin_keys())
     await call.answer()
+
 
 @dp.callback_query(F.data.startswith("admin:ok:") | F.data.startswith("admin:no:"))
 async def admin_decision(call: CallbackQuery):
@@ -1322,6 +1623,11 @@ async def admin_decision(call: CallbackQuery):
         except Exception:
             pass
 
+        try:
+            await refresh_reply_menu(order["user_id"], order["user_id"])
+        except Exception:
+            pass
+
         await call.answer("Выдано ✅")
 
 
@@ -1374,6 +1680,7 @@ async def admin_search_input(m: Message, state: FSMContext):
     await m.answer("\n".join(out), reply_markup=kb_admin_menu())
     await state.clear()
 
+
 @dp.message(AdminStates.price_wait)
 async def admin_price_input(m: Message, state: FSMContext):
     if not is_admin(m.from_user.id):
@@ -1409,6 +1716,7 @@ async def admin_price_input(m: Message, state: FSMContext):
 
     await state.clear()
     await m.answer("✅ Цена обновлена.", reply_markup=kb_admin_prices())
+
 
 @dp.message(AdminStates.keys_wait)
 async def admin_keys_input(m: Message, state: FSMContext):
@@ -1446,6 +1754,7 @@ async def admin_keys_input(m: Message, state: FSMContext):
         f"📦 Всего ключей в базе: *{count_all}*",
         reply_markup=kb_admin_keys()
     )
+
 
 @dp.message(AdminStates.broadcast_wait)
 async def admin_broadcast_send(m: Message, state: FSMContext):
@@ -1497,6 +1806,7 @@ async def main():
     db_init()
     import_keys_from_files_if_empty()
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
