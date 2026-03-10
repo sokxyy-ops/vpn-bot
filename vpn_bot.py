@@ -57,6 +57,9 @@ FAMILY_KEYS_FILE = os.path.join(BASE_DIR, "family_keys.txt")
 RESEND_COOLDOWN_SEC = 10 * 60
 RESEND_MAX = 3
 
+# ================== PAGINATION ==================
+USERS_PAGE_SIZE = 10
+
 # ================== BOT ==================
 bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher(storage=MemoryStorage())
@@ -133,7 +136,6 @@ def db_init():
             is_banned INTEGER DEFAULT 0
         )
     """)
-
     _add_column_if_missing(con, "users", "is_blocked", "ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
     _add_column_if_missing(con, "users", "is_banned", "ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
 
@@ -280,6 +282,25 @@ def db_ban_user_and_revoke(user_id: int):
         con.close()
 
 
+def db_unban_user(user_id: int):
+    """
+    После разбана подписки не возвращаются.
+    revoked остаются revoked, accepted не восстанавливаются.
+    """
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            UPDATE users
+            SET is_banned=0,
+                last_seen=?
+            WHERE user_id=?
+        """, (int(time.time()), user_id))
+        con.commit()
+    finally:
+        con.close()
+
+
 def db_list_users_for_broadcast() -> List[int]:
     con = db()
     try:
@@ -336,6 +357,42 @@ def db_list_users(limit: int = 20, offset: int = 0):
             LIMIT ? OFFSET ?
         """, (limit, offset))
         return cur.fetchall()
+    finally:
+        con.close()
+
+
+def db_list_banned_users(limit: int = 20, offset: int = 0):
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT user_id, username, first_name, last_seen, is_blocked, is_banned
+            FROM users
+            WHERE COALESCE(is_banned,0)=1
+            ORDER BY last_seen DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        return cur.fetchall()
+    finally:
+        con.close()
+
+
+def db_count_users() -> int:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        return int(cur.fetchone()[0] or 0)
+    finally:
+        con.close()
+
+
+def db_count_banned_users() -> int:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE COALESCE(is_banned,0)=1")
+        return int(cur.fetchone()[0] or 0)
     finally:
         con.close()
 
@@ -984,7 +1041,8 @@ def kb_admin_menu():
          InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🏷 Цены", callback_data="admin:prices"),
          InlineKeyboardButton(text="🔑 Ключи", callback_data="admin:keys")],
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
+         InlineKeyboardButton(text="⛔ Заблокированные", callback_data="admin:banned:0")],
     ])
 
 
@@ -1040,27 +1098,53 @@ def kb_admin_profit():
     ])
 
 
-def kb_admin_users_list(rows):
+def _user_button_title(user_id, username, first_name, is_blocked, is_banned):
+    name = first_name or "—"
+    uname = f"@{username}" if username else "—"
+    status = "⛔" if is_banned else ("🚫" if is_blocked else "✅")
+    title = f"{status} {name} • {uname} • {user_id}"
+    return title[:60] if len(title) <= 60 else title[:57] + "..."
+
+
+def kb_admin_users_page(rows, page: int, total: int, mode: str):
     keyboard = []
-    for user_id, username, first_name, last_seen, is_blocked, is_banned in rows[:20]:
-        name = first_name or "—"
-        uname = f"@{username}" if username else "—"
-        status = "⛔" if is_banned else ("🚫" if is_blocked else "✅")
-        title = f"{status} {name} • {uname} • {user_id}"
-        if len(title) > 60:
-            title = title[:57] + "..."
-        keyboard.append([InlineKeyboardButton(text=title, callback_data=f"admin:user:{user_id}")])
+
+    for user_id, username, first_name, last_seen, is_blocked, is_banned in rows:
+        keyboard.append([InlineKeyboardButton(
+            text=_user_button_title(user_id, username, first_name, is_blocked, is_banned),
+            callback_data=f"admin:user:{user_id}:{mode}:{page}"
+        )])
+
+    nav = []
+    max_page = max(0, (total - 1) // USERS_PAGE_SIZE) if total > 0 else 0
+
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin:{mode}:{page - 1}"))
+
+    nav.append(InlineKeyboardButton(text=f"{page + 1}/{max_page + 1}", callback_data="noop"))
+
+    if page < max_page:
+        nav.append(InlineKeyboardButton(text="➡️", callback_data=f"admin:{mode}:{page + 1}"))
+
+    if nav:
+        keyboard.append(nav)
 
     keyboard.append([InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def kb_admin_user_view(user_id: int):
+def kb_admin_user_view(user_id: int, mode: str, page: int):
     user = db_get_user(user_id)
     buttons = []
-    if user and not user.get("is_banned"):
-        buttons.append([InlineKeyboardButton(text="⛔ Забанить и аннулировать подписку", callback_data=f"admin:ban:{user_id}")])
-    buttons.append([InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:users")])
+
+    if user:
+        if user.get("is_banned"):
+            buttons.append([InlineKeyboardButton(text="✅ Разбанить", callback_data=f"admin:unban:{user_id}:{mode}:{page}")])
+        else:
+            buttons.append([InlineKeyboardButton(text="⛔ Забанить и аннулировать подписку", callback_data=f"admin:ban:{user_id}:{mode}:{page}")])
+
+    back_target = "users" if mode == "users" else "banned"
+    buttons.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:{back_target}:{page}")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -1165,6 +1249,49 @@ async def refresh_reply_menu(chat_id: int, user_id: int):
         pass
 
 
+async def send_admin_users_page(call: CallbackQuery, page: int, banned_only: bool):
+    page = max(0, page)
+    offset = page * USERS_PAGE_SIZE
+
+    if banned_only:
+        rows = db_list_banned_users(limit=USERS_PAGE_SIZE, offset=offset)
+        total = db_count_banned_users()
+        title = "⛔ *Заблокированные пользователи*"
+        mode = "banned"
+    else:
+        rows = db_list_users(limit=USERS_PAGE_SIZE, offset=offset)
+        total = db_count_users()
+        title = "👥 *Пользователи*"
+        mode = "users"
+
+    max_page = max(0, (total - 1) // USERS_PAGE_SIZE) if total > 0 else 0
+    if page > max_page:
+        page = max_page
+        offset = page * USERS_PAGE_SIZE
+        rows = db_list_banned_users(limit=USERS_PAGE_SIZE, offset=offset) if banned_only else db_list_users(limit=USERS_PAGE_SIZE, offset=offset)
+
+    stats = db_users_stats()
+
+    text = (
+        f"{title}\n\n"
+        f"👤 Всего в базе: *{stats['total']}*\n"
+        f"🟢 Активны за 24ч: *{stats['active_day']}*\n"
+        f"🟡 Активны за 7д: *{stats['active_week']}*\n"
+        f"🚫 Заблокировали бота: *{stats['blocked']}*\n"
+        f"⛔ Забанены: *{stats['banned']}*\n\n"
+        f"📄 Страница: *{page + 1}/{max_page + 1 if total > 0 else 1}*\n"
+        f"📦 На этой странице: *{len(rows)}*"
+    )
+
+    if total == 0:
+        text += "\n\nСписок пуст."
+
+    await call.message.answer(
+        text,
+        reply_markup=kb_admin_users_page(rows, page, total, mode)
+    )
+
+
 # ================== START / MENU ==================
 @dp.message(CommandStart())
 async def start(m: Message):
@@ -1226,6 +1353,11 @@ async def admin_cmd(m: Message):
 
 
 # ================== CALLBACK: MENU ==================
+@dp.callback_query(F.data == "noop")
+async def noop(call: CallbackQuery):
+    await call.answer()
+
+
 @dp.callback_query(F.data.startswith("menu:"))
 async def menu_router(call: CallbackQuery):
     try:
@@ -1520,97 +1652,6 @@ async def admin_home(call: CallbackQuery):
     await call.answer()
 
 
-@dp.callback_query(F.data == "admin:users")
-async def admin_users(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Нет доступа", show_alert=True)
-        return
-
-    s = db_users_stats()
-    rows = db_list_users(limit=20, offset=0)
-
-    text = (
-        "👥 *Пользователи*\n\n"
-        f"👤 Всего в базе: *{s['total']}*\n"
-        f"🟢 Активны за 24ч: *{s['active_day']}*\n"
-        f"🟡 Активны за 7д: *{s['active_week']}*\n"
-        f"🚫 Заблокировали бота: *{s['blocked']}*\n"
-        f"⛔ Забанены: *{s['banned']}*\n\n"
-        "*Последние 20 пользователей:*"
-    )
-
-    await call.message.answer(text, reply_markup=kb_admin_users_list(rows))
-    await call.answer()
-
-
-@dp.callback_query(F.data.startswith("admin:user:"))
-async def admin_user_view(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Нет доступа", show_alert=True)
-        return
-
-    user_id = int(call.data.split(":")[-1])
-    user = db_get_user(user_id)
-    if not user:
-        await call.answer("Пользователь не найден", show_alert=True)
-        return
-
-    uname = f"@{user['username']}" if user["username"] else "—"
-    fname = user["first_name"] or "—"
-    sub_count = db_count_user_subscriptions(user_id)
-    active_order = db_get_active_order(user_id)
-
-    status_parts = []
-    status_parts.append("⛔ Забанен" if user["is_banned"] else "✅ Не забанен")
-    status_parts.append("🚫 Бот заблокирован" if user["is_blocked"] else "✅ Бот доступен")
-
-    await call.message.answer(
-        "👤 *Карточка пользователя*\n\n"
-        f"🆔 ID: `{user_id}`\n"
-        f"👤 Имя: {fname}\n"
-        f"🔹 Username: {uname}\n"
-        f"🕒 Последняя активность: {fmt_ts(user['last_seen'])}\n"
-        f"📦 Активных подписок: *{sub_count}*\n"
-        f"🧾 Активный заказ: *{'Да' if active_order else 'Нет'}*\n"
-        f"📌 Статус: {' • '.join(status_parts)}",
-        reply_markup=kb_admin_user_view(user_id)
-    )
-    await call.answer()
-
-
-@dp.callback_query(F.data.startswith("admin:ban:"))
-async def admin_ban_user(call: CallbackQuery):
-    if not is_admin(call.from_user.id):
-        await call.answer("Нет доступа", show_alert=True)
-        return
-
-    user_id = int(call.data.split(":")[-1])
-
-    if user_id == ADMIN_ID:
-        await call.answer("Админа банить нельзя", show_alert=True)
-        return
-
-    db_ban_user_and_revoke(user_id)
-
-    try:
-        await bot.send_message(
-            user_id,
-            "⛔ Твой доступ аннулирован.\n"
-            "Подписки отключены, пользоваться ботом больше нельзя."
-        )
-    except Exception:
-        pass
-
-    await call.message.answer(
-        f"⛔ *Пользователь `{user_id}` забанен.*\n\n"
-        "✅ Подписки аннулированы\n"
-        "✅ Активные заказы отменены\n"
-        "✅ Доступ к боту закрыт",
-        reply_markup=kb_admin_menu()
-    )
-    await call.answer("Пользователь забанен ✅", show_alert=True)
-
-
 @dp.callback_query(F.data == "admin:list")
 async def admin_list(call: CallbackQuery):
     if not is_admin(call.from_user.id):
@@ -1821,6 +1862,151 @@ async def admin_keys_clear_yes(call: CallbackQuery):
     db_keys_clear(plan)
     await call.message.answer("✅ Ключи очищены.", reply_markup=kb_admin_keys())
     await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:users:"))
+async def admin_users(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        page = int(call.data.split(":")[-1])
+    except Exception:
+        page = 0
+
+    await send_admin_users_page(call, page=page, banned_only=False)
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:banned:"))
+async def admin_banned(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    try:
+        page = int(call.data.split(":")[-1])
+    except Exception:
+        page = 0
+
+    await send_admin_users_page(call, page=page, banned_only=True)
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:user:"))
+async def admin_user_view(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    parts = call.data.split(":")
+    if len(parts) < 5:
+        await call.answer("Ошибка", show_alert=True)
+        return
+
+    user_id = int(parts[2])
+    mode = parts[3]
+    page = int(parts[4])
+
+    user = db_get_user(user_id)
+    if not user:
+        await call.answer("Пользователь не найден", show_alert=True)
+        return
+
+    uname = f"@{user['username']}" if user["username"] else "—"
+    fname = user["first_name"] or "—"
+    sub_count = db_count_user_subscriptions(user_id)
+    active_order = db_get_active_order(user_id)
+
+    status_parts = []
+    status_parts.append("⛔ Забанен" if user["is_banned"] else "✅ Не забанен")
+    status_parts.append("🚫 Бот заблокирован" if user["is_blocked"] else "✅ Бот доступен")
+
+    await call.message.answer(
+        "👤 *Карточка пользователя*\n\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"👤 Имя: {fname}\n"
+        f"🔹 Username: {uname}\n"
+        f"🕒 Последняя активность: {fmt_ts(user['last_seen'])}\n"
+        f"📦 Активных подписок: *{sub_count}*\n"
+        f"🧾 Активный заказ: *{'Да' if active_order else 'Нет'}*\n"
+        f"📌 Статус: {' • '.join(status_parts)}",
+        reply_markup=kb_admin_user_view(user_id, mode, page)
+    )
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:ban:"))
+async def admin_ban_user(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    parts = call.data.split(":")
+    user_id = int(parts[2])
+    mode = parts[3] if len(parts) > 3 else "users"
+    page = int(parts[4]) if len(parts) > 4 else 0
+
+    if user_id == ADMIN_ID:
+        await call.answer("Админа банить нельзя", show_alert=True)
+        return
+
+    db_ban_user_and_revoke(user_id)
+
+    try:
+        await bot.send_message(
+            user_id,
+            "⛔ Твой доступ аннулирован.\n"
+            "Подписки отключены, пользоваться ботом больше нельзя."
+        )
+    except Exception:
+        pass
+
+    await call.message.answer(
+        f"⛔ *Пользователь `{user_id}` забанен.*\n\n"
+        "✅ Подписки аннулированы\n"
+        "✅ Активные заказы отменены\n"
+        "✅ Доступ к боту закрыт",
+        reply_markup=kb_admin_user_view(user_id, mode, page)
+    )
+    await call.answer("Пользователь забанен ✅", show_alert=True)
+
+
+@dp.callback_query(F.data.startswith("admin:unban:"))
+async def admin_unban_user(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    parts = call.data.split(":")
+    if len(parts) < 5:
+        await call.answer("Ошибка", show_alert=True)
+        return
+
+    user_id = int(parts[2])
+    mode = parts[3]
+    page = int(parts[4])
+
+    db_unban_user(user_id)
+
+    try:
+        await bot.send_message(
+            user_id,
+            "✅ Ты был разбанен.\n"
+            "Можешь снова пользоваться ботом.\n"
+            "Подписок после разбана не возвращается."
+        )
+    except Exception:
+        pass
+
+    await call.message.answer(
+        f"✅ *Пользователь `{user_id}` разбанен.*\n\n"
+        "⚠️ Подписки не восстановлены.\n"
+        "После разбана у пользователя *нет никаких подписок*.",
+        reply_markup=kb_admin_user_view(user_id, mode, page)
+    )
+    await call.answer("Пользователь разбанен ✅", show_alert=True)
 
 
 @dp.callback_query(F.data.startswith("admin:ok:") | F.data.startswith("admin:no:"))
