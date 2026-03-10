@@ -34,6 +34,7 @@ BANNER_PATH = os.path.join(BASE_DIR, os.getenv("BANNER_PATH", "banner.jpg"))
 TG_CHANNEL = "https://t.me/sokxyybc"
 PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
+AGREEMENT_URL = "https://telegra.ph/Soglashenie-03-10-3"
 
 HAPP_ANDROID_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
 HAPP_IOS_URL = "https://apps.apple.com/app/happ-proxy-utility/id6504287215"
@@ -971,6 +972,14 @@ def kb_buy():
     ])
 
 
+
+def kb_agreement(plan: str):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📄 Пользовательское соглашение", url=AGREEMENT_URL)],
+        [InlineKeyboardButton(text="✅ Принять условия", callback_data=f"agree:{plan}")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:buy")],
+    ])
+
 def kb_payment(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel:{order_id}")],
@@ -1426,12 +1435,57 @@ async def menu_router(call: CallbackQuery):
 async def buy(call: CallbackQuery):
     try:
         user_id = call.from_user.id
+
+        active = db_get_active_order(user_id)
+        if active:
+            await call.message.answer(
+                f"⏳ У тебя уже есть активный заказ *#{active['id']}*.
+"
+                "Если админ не отвечает — можно *❌ Отменить заказ* или *🔁 Переслать админу* (ограничено)."
+            )
+            await refresh_reply_menu(call.message.chat.id, call.from_user.id)
+            return
+
+        plan = call.data.split(":", 1)[1]
+        if plan not in ("standard", "family"):
+            await call.answer("Ошибка тарифа", show_alert=True)
+            return
+
+        plan_name, conditions, _device_limit, amount = plan_meta(plan)
+
+        await call.message.answer(
+            f"📄 *Перед покупкой ознакомься с условиями использования.*
+
+"
+            f"📦 Тариф: *{plan_name}*
+"
+            f"{conditions}
+"
+            f"💰 Сумма: *{amount}₽*
+
+"
+            "Нажимая кнопку *«Принять условия»*, ты подтверждаешь согласие с пользовательским соглашением.",
+            reply_markup=kb_agreement(plan)
+        )
+        await refresh_reply_menu(call.message.chat.id, call.from_user.id)
+    finally:
+        try:
+            await call.answer()
+        except Exception:
+            pass
+
+
+@dp.callback_query(F.data.startswith("agree:"))
+async def agree(call: CallbackQuery):
+    try:
+        user_id = call.from_user.id
         username = call.from_user.username
 
         active = db_get_active_order(user_id)
         if active:
             await call.message.answer(
-                f"⏳ У тебя уже есть активный заказ *#{active['id']}*.\n"
+                f"⏳ У тебя уже есть активный заказ *#{active['id']}*.
+"
                 "Если админ не отвечает — можно *❌ Отменить заказ* или *🔁 Переслать админу* (ограничено)."
             )
             await refresh_reply_menu(call.message.chat.id, call.from_user.id)
@@ -1446,11 +1500,19 @@ async def buy(call: CallbackQuery):
         order_id = db_create_order(user_id, username, plan, amount)
 
         msg = await call.message.answer(
-            f"🧾 *Заказ #{order_id}*\n\n"
-            f"📦 Тариф: *{plan_name}*\n"
-            f"{conditions}\n"
-            f"💰 Сумма: *{amount}₽*\n\n"
-            f"{PAYMENT_TEXT}\n\n"
+            f"🧾 *Заказ #{order_id}*
+
+"
+            f"📦 Тариф: *{plan_name}*
+"
+            f"{conditions}
+"
+            f"💰 Сумма: *{amount}₽*
+
+"
+            f"{PAYMENT_TEXT}
+
+"
             "📎 *Отправь чек/скрин сюда в чат* (фото/файл/текст).",
             reply_markup=kb_payment(order_id)
         )
@@ -1461,8 +1523,6 @@ async def buy(call: CallbackQuery):
             await call.answer()
         except Exception:
             pass
-
-
 @dp.callback_query(F.data.startswith("cancel:"))
 async def cancel_order(call: CallbackQuery):
     try:
