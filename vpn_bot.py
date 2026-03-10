@@ -129,9 +129,13 @@ def db_init():
             username TEXT,
             first_name TEXT,
             last_seen INTEGER NOT NULL,
-            is_blocked INTEGER DEFAULT 0
+            is_blocked INTEGER DEFAULT 0,
+            is_banned INTEGER DEFAULT 0
         )
     """)
+
+    _add_column_if_missing(con, "users", "is_blocked", "ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
+    _add_column_if_missing(con, "users", "is_banned", "ALTER TABLE users ADD COLUMN is_banned INTEGER DEFAULT 0")
 
     _ensure_table(con, """
         CREATE TABLE IF NOT EXISTS settings (
@@ -154,6 +158,16 @@ def db_init():
     """)
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_keys_unique ON keys_store(plan, key)")
     con.commit()
+
+    _ensure_table(con, """
+        CREATE TABLE IF NOT EXISTS profit_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    cur.execute("INSERT OR IGNORE INTO profit_meta(key, value) VALUES('profit_offset', '0')")
+    con.commit()
+
     con.close()
 
 
@@ -187,8 +201,8 @@ def db_upsert_user(user_id: int, username: Optional[str], first_name: Optional[s
     try:
         cur = con.cursor()
         cur.execute("""
-            INSERT INTO users(user_id, username, first_name, last_seen, is_blocked)
-            VALUES(?,?,?,?,0)
+            INSERT INTO users(user_id, username, first_name, last_seen, is_blocked, is_banned)
+            VALUES(?,?,?,?,0,0)
             ON CONFLICT(user_id) DO UPDATE SET
                 username=excluded.username,
                 first_name=excluded.first_name,
@@ -209,11 +223,68 @@ def db_mark_blocked(user_id: int, blocked: bool):
         con.close()
 
 
+def db_is_banned(user_id: int) -> bool:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT COALESCE(is_banned,0) FROM users WHERE user_id=?", (user_id,))
+        row = cur.fetchone()
+        return bool(row and int(row[0] or 0) == 1)
+    finally:
+        con.close()
+
+
+def db_set_banned(user_id: int, banned: bool):
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            INSERT INTO users(user_id, username, first_name, last_seen, is_blocked, is_banned)
+            VALUES(?, '', '', ?, 0, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                is_banned=excluded.is_banned,
+                last_seen=excluded.last_seen
+        """, (user_id, int(time.time()), 1 if banned else 0))
+        con.commit()
+    finally:
+        con.close()
+
+
+def db_ban_user_and_revoke(user_id: int):
+    con = db()
+    try:
+        cur = con.cursor()
+
+        cur.execute("""
+            UPDATE orders
+            SET status='revoked', issued_key=NULL
+            WHERE user_id=? AND status='accepted'
+        """, (user_id,))
+
+        cur.execute("""
+            UPDATE orders
+            SET status='cancelled'
+            WHERE user_id=? AND status IN ('waiting_receipt','pending_admin')
+        """, (user_id,))
+
+        cur.execute("""
+            INSERT INTO users(user_id, username, first_name, last_seen, is_blocked, is_banned)
+            VALUES(?, '', '', ?, 0, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                is_banned=1,
+                last_seen=excluded.last_seen
+        """, (user_id, int(time.time())))
+
+        con.commit()
+    finally:
+        con.close()
+
+
 def db_list_users_for_broadcast() -> List[int]:
     con = db()
     try:
         cur = con.cursor()
-        cur.execute("SELECT user_id FROM users WHERE COALESCE(is_blocked,0)=0")
+        cur.execute("SELECT user_id FROM users WHERE COALESCE(is_blocked,0)=0 AND COALESCE(is_banned,0)=0")
         return [r[0] for r in cur.fetchall()]
     finally:
         con.close()
@@ -234,6 +305,9 @@ def db_users_stats() -> Dict[str, int]:
         cur.execute("SELECT COUNT(*) FROM users WHERE COALESCE(is_blocked,0)=1")
         blocked = int(cur.fetchone()[0] or 0)
 
+        cur.execute("SELECT COUNT(*) FROM users WHERE COALESCE(is_banned,0)=1")
+        banned = int(cur.fetchone()[0] or 0)
+
         cur.execute("SELECT COUNT(*) FROM users WHERE last_seen>=?", (day_ago,))
         active_day = int(cur.fetchone()[0] or 0)
 
@@ -243,8 +317,48 @@ def db_users_stats() -> Dict[str, int]:
         return {
             "total": total,
             "blocked": blocked,
+            "banned": banned,
             "active_day": active_day,
             "active_week": active_week,
+        }
+    finally:
+        con.close()
+
+
+def db_list_users(limit: int = 20, offset: int = 0):
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT user_id, username, first_name, last_seen, is_blocked, is_banned
+            FROM users
+            ORDER BY last_seen DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+        return cur.fetchall()
+    finally:
+        con.close()
+
+
+def db_get_user(user_id: int):
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT user_id, username, first_name, last_seen, is_blocked, is_banned
+            FROM users
+            WHERE user_id=?
+        """, (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "user_id": row[0],
+            "username": row[1],
+            "first_name": row[2],
+            "last_seen": row[3],
+            "is_blocked": row[4] or 0,
+            "is_banned": row[5] or 0,
         }
     finally:
         con.close()
@@ -357,28 +471,6 @@ def db_get_order(order_id: int):
     }
 
 
-def db_get_last_accepted(user_id: int):
-    con = db()
-    cur = con.cursor()
-    cur.execute("""
-        SELECT id, plan, amount, issued_key, accepted_at
-        FROM orders
-        WHERE user_id=? AND status='accepted'
-        ORDER BY id DESC LIMIT 1
-    """, (user_id,))
-    row = cur.fetchone()
-    con.close()
-    if not row:
-        return None
-    return {
-        "id": row[0],
-        "plan": row[1],
-        "amount": row[2],
-        "issued_key": row[3],
-        "accepted_at": row[4],
-    }
-
-
 def db_get_accepted_subscriptions(user_id: int):
     con = db()
     cur = con.cursor()
@@ -420,6 +512,23 @@ def db_update_user_plan_key(user_id: int, plan: str, new_key: str) -> int:
         """, (new_key, user_id, plan))
         con.commit()
         return cur.rowcount or 0
+    finally:
+        con.close()
+
+
+def db_count_user_subscriptions(user_id: int) -> int:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM (
+                SELECT DISTINCT plan
+                FROM orders
+                WHERE user_id=? AND status='accepted'
+            )
+        """, (user_id,))
+        return int(cur.fetchone()[0] or 0)
     finally:
         con.close()
 
@@ -473,6 +582,32 @@ def db_mark_resend(order_id: int):
     con.close()
 
 
+def db_profit_offset_get() -> int:
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT value FROM profit_meta WHERE key='profit_offset'")
+        row = cur.fetchone()
+        return int(row[0]) if row and str(row[0]).isdigit() else 0
+    finally:
+        con.close()
+
+
+def db_profit_reset():
+    con = db()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='accepted'")
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute("""
+            INSERT INTO profit_meta(key, value) VALUES('profit_offset', ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """, (str(total),))
+        con.commit()
+    finally:
+        con.close()
+
+
 def db_profit_totals() -> Dict[str, int]:
     now = int(time.time())
     day_ago = now - 24 * 3600
@@ -484,7 +619,7 @@ def db_profit_totals() -> Dict[str, int]:
         cur = con.cursor()
 
         cur.execute("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='accepted'")
-        total = int(cur.fetchone()[0] or 0)
+        total_raw = int(cur.fetchone()[0] or 0)
 
         cur.execute("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='accepted' AND accepted_at>=?", (day_ago,))
         day = int(cur.fetchone()[0] or 0)
@@ -494,6 +629,9 @@ def db_profit_totals() -> Dict[str, int]:
 
         cur.execute("SELECT COALESCE(SUM(amount),0) FROM orders WHERE status='accepted' AND accepted_at>=?", (month_ago,))
         month = int(cur.fetchone()[0] or 0)
+
+        offset = db_profit_offset_get()
+        total = max(0, total_raw - offset)
 
         return {"total": total, "day": day, "week": week, "month": month}
     finally:
@@ -617,10 +755,6 @@ def db_keys_clear(plan: str):
 
 
 def take_key(plan: str, order_id: int = 0) -> Optional[str]:
-    """
-    Ключ НЕ помечается как использованный.
-    Всегда выдается первый ключ тарифа.
-    """
     con = db()
     try:
         cur = con.cursor()
@@ -634,11 +768,6 @@ def take_key(plan: str, order_id: int = 0) -> Optional[str]:
 
 
 def get_latest_key_for_plan(plan: str) -> Optional[str]:
-    """
-    Берет самый свежий ключ по тарифу.
-    Если ты обновил ключи через админку, юзер после нажатия
-    'Обновить подписку' получит именно актуальный ключ.
-    """
     con = db()
     try:
         cur = con.cursor()
@@ -740,11 +869,7 @@ def text_subscription_card(from_user, subs: Optional[list]):
             f"> Выдано: {fmt_ts(sub.get('accepted_at'))}",
         ])
 
-    parts.extend([
-        "",
-        "👇 Используй кнопки ниже"
-    ])
-
+    parts.extend(["", "👇 Используй кнопки ниже"])
     return "\n".join(parts)
 
 
@@ -760,23 +885,16 @@ def fmt_ts(ts: Optional[int]) -> str:
 # ================== KEYBOARDS ==================
 def kb_reply_menu(user_id: int):
     active = db_get_active_order(user_id)
-
-    rows = [
-        [KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")]
-    ]
+    rows = [[KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")]]
 
     if active:
         rows.append([KeyboardButton(text="❌ Отменить заказ")])
 
-    return ReplyKeyboardMarkup(
-        keyboard=rows,
-        resize_keyboard=True
-    )
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def kb_main(user_id: int):
     active = db_get_active_order(user_id)
-
     rows = [
         [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")],
         [InlineKeyboardButton(text="🧾 Моя подписка", callback_data="menu:sub")],
@@ -786,7 +904,6 @@ def kb_main(user_id: int):
         rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
 
     rows.append([InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)])
-
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -809,10 +926,14 @@ def kb_payment(order_id: int):
 
 
 def kb_admin_decision(order_id: int):
-    return InlineKeyboardMarkup(inline_keyboard=[
+    order = db_get_order(order_id)
+    keyboard = [
         [InlineKeyboardButton(text="✅ Принять", callback_data=f"admin:ok:{order_id}"),
          InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin:no:{order_id}")]
-    ])
+    ]
+    if order:
+        keyboard.append([InlineKeyboardButton(text="⛔ Бан", callback_data=f"admin:ban:{order['user_id']}")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
 def kb_after_issue():
@@ -827,33 +948,31 @@ def kb_after_issue():
 
 
 def kb_sub_no_sub(user_id: int):
-    rows = [
-        [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")],
-        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
-    ]
+    rows = [[InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")]]
 
     active = db_get_active_order(user_id)
     if active:
-        rows.insert(1, [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
+        rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
 
+    rows.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def kb_sub_with_refresh(user_id: int):
-    rows = [
-        [InlineKeyboardButton(text="🔄 Обновить подписку", callback_data="sub:refresh")],
+    rows = [[InlineKeyboardButton(text="🔄 Обновить подписку", callback_data="sub:refresh")]]
+
+    active = db_get_active_order(user_id)
+    if active:
+        rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
+
+    rows.extend([
         [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
         [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
         [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
         [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
-    ]
-
-    active = db_get_active_order(user_id)
-    if active:
-        rows.insert(1, [InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
-
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -914,6 +1033,37 @@ def kb_confirm_clear(plan: str):
     ])
 
 
+def kb_admin_profit():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="♻️ Сбросить прибыль", callback_data="admin:profit:reset")],
+        [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
+    ])
+
+
+def kb_admin_users_list(rows):
+    keyboard = []
+    for user_id, username, first_name, last_seen, is_blocked, is_banned in rows[:20]:
+        name = first_name or "—"
+        uname = f"@{username}" if username else "—"
+        status = "⛔" if is_banned else ("🚫" if is_blocked else "✅")
+        title = f"{status} {name} • {uname} • {user_id}"
+        if len(title) > 60:
+            title = title[:57] + "..."
+        keyboard.append([InlineKeyboardButton(text=title, callback_data=f"admin:user:{user_id}")])
+
+    keyboard.append([InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def kb_admin_user_view(user_id: int):
+    user = db_get_user(user_id)
+    buttons = []
+    if user and not user.get("is_banned"):
+        buttons.append([InlineKeyboardButton(text="⛔ Забанить и аннулировать подписку", callback_data=f"admin:ban:{user_id}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Пользователи", callback_data="admin:users")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 # ================== MIDDLEWARE ==================
 class TrackUserMiddleware(BaseMiddleware):
     async def __call__(
@@ -942,8 +1092,38 @@ class TrackUserMiddleware(BaseMiddleware):
         return await handler(event, data)
 
 
+class BanMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[Any, Dict[str, Any]], Awaitable[Any]],
+        event: Any,
+        data: Dict[str, Any],
+    ) -> Any:
+        from_user = getattr(event, "from_user", None)
+        if not from_user:
+            return await handler(event, data)
+
+        if from_user.id == ADMIN_ID:
+            return await handler(event, data)
+
+        try:
+            if db_is_banned(from_user.id):
+                if isinstance(event, Message):
+                    await event.answer("⛔ Ты заблокирован и не можешь пользоваться ботом.")
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("⛔ Ты заблокирован", show_alert=True)
+                return
+        except Exception:
+            pass
+
+        return await handler(event, data)
+
+
 dp.message.middleware(TrackUserMiddleware())
 dp.callback_query.middleware(TrackUserMiddleware())
+
+dp.message.middleware(BanMiddleware())
+dp.callback_query.middleware(BanMiddleware())
 
 
 # ================== HELPERS ==================
@@ -1011,6 +1191,7 @@ async def mysub_btn(m: Message):
         await m.answer(text_subscription_card(m.from_user, None), reply_markup=kb_sub_no_sub(m.from_user.id))
         await refresh_reply_menu(m.chat.id, m.from_user.id)
         return
+
     await m.answer(text_subscription_card(m.from_user, subs), reply_markup=kb_sub_with_refresh(m.from_user.id))
     await refresh_reply_menu(m.chat.id, m.from_user.id)
 
@@ -1123,6 +1304,10 @@ async def buy(call: CallbackQuery):
             return
 
         plan = call.data.split(":", 1)[1]
+        if plan not in ("standard", "family"):
+            await call.answer("Ошибка тарифа", show_alert=True)
+            return
+
         plan_name, conditions, _device_limit, amount = plan_meta(plan)
         order_id = db_create_order(user_id, username, plan, amount)
 
@@ -1305,7 +1490,6 @@ async def refresh_subscription(call: CallbackQuery):
             refreshed.append((plan, latest_key))
 
         subs_updated = db_get_accepted_subscriptions(call.from_user.id)
-
         text = text_subscription_card(call.from_user, subs_updated)
 
         if refreshed:
@@ -1341,16 +1525,90 @@ async def admin_users(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     s = db_users_stats()
-    await call.message.answer(
+    rows = db_list_users(limit=20, offset=0)
+
+    text = (
         "👥 *Пользователи*\n\n"
         f"👤 Всего в базе: *{s['total']}*\n"
         f"🟢 Активны за 24ч: *{s['active_day']}*\n"
-        f"🟡 Активны за 7д: *{s['active_week']}*\n\n"
-        f"🚫 Заблокировали бота: *{s['blocked']}*",
-        reply_markup=kb_admin_menu()
+        f"🟡 Активны за 7д: *{s['active_week']}*\n"
+        f"🚫 Заблокировали бота: *{s['blocked']}*\n"
+        f"⛔ Забанены: *{s['banned']}*\n\n"
+        "*Последние 20 пользователей:*"
+    )
+
+    await call.message.answer(text, reply_markup=kb_admin_users_list(rows))
+    await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:user:"))
+async def admin_user_view(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    user_id = int(call.data.split(":")[-1])
+    user = db_get_user(user_id)
+    if not user:
+        await call.answer("Пользователь не найден", show_alert=True)
+        return
+
+    uname = f"@{user['username']}" if user["username"] else "—"
+    fname = user["first_name"] or "—"
+    sub_count = db_count_user_subscriptions(user_id)
+    active_order = db_get_active_order(user_id)
+
+    status_parts = []
+    status_parts.append("⛔ Забанен" if user["is_banned"] else "✅ Не забанен")
+    status_parts.append("🚫 Бот заблокирован" if user["is_blocked"] else "✅ Бот доступен")
+
+    await call.message.answer(
+        "👤 *Карточка пользователя*\n\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"👤 Имя: {fname}\n"
+        f"🔹 Username: {uname}\n"
+        f"🕒 Последняя активность: {fmt_ts(user['last_seen'])}\n"
+        f"📦 Активных подписок: *{sub_count}*\n"
+        f"🧾 Активный заказ: *{'Да' if active_order else 'Нет'}*\n"
+        f"📌 Статус: {' • '.join(status_parts)}",
+        reply_markup=kb_admin_user_view(user_id)
     )
     await call.answer()
+
+
+@dp.callback_query(F.data.startswith("admin:ban:"))
+async def admin_ban_user(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    user_id = int(call.data.split(":")[-1])
+
+    if user_id == ADMIN_ID:
+        await call.answer("Админа банить нельзя", show_alert=True)
+        return
+
+    db_ban_user_and_revoke(user_id)
+
+    try:
+        await bot.send_message(
+            user_id,
+            "⛔ Твой доступ аннулирован.\n"
+            "Подписки отключены, пользоваться ботом больше нельзя."
+        )
+    except Exception:
+        pass
+
+    await call.message.answer(
+        f"⛔ *Пользователь `{user_id}` забанен.*\n\n"
+        "✅ Подписки аннулированы\n"
+        "✅ Активные заказы отменены\n"
+        "✅ Доступ к боту закрыт",
+        reply_markup=kb_admin_menu()
+    )
+    await call.answer("Пользователь забанен ✅", show_alert=True)
 
 
 @dp.callback_query(F.data == "admin:list")
@@ -1398,16 +1656,32 @@ async def admin_profit(call: CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("Нет доступа", show_alert=True)
         return
+
     p = db_profit_totals()
     await call.message.answer(
         "💰 *Прибыль*\n\n"
         f"📅 За 24ч: *{p['day']}₽*\n"
         f"🗓 За 7д: *{p['week']}₽*\n"
         f"🗓 За 30д: *{p['month']}₽*\n\n"
-        f"🏦 Всего: *{p['total']}₽*",
-        reply_markup=kb_admin_menu()
+        f"🏦 Всего после сброса: *{p['total']}₽*",
+        reply_markup=kb_admin_profit()
     )
     await call.answer()
+
+
+@dp.callback_query(F.data == "admin:profit:reset")
+async def admin_profit_reset(call: CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
+        return
+
+    db_profit_reset()
+    await call.message.answer(
+        "♻️ *Прибыль сброшена.*\n\n"
+        "История заказов сохранена, сброшен только счётчик общей прибыли.",
+        reply_markup=kb_admin_profit()
+    )
+    await call.answer("Прибыль сброшена ✅", show_alert=True)
 
 
 @dp.callback_query(F.data == "admin:search")
@@ -1563,12 +1837,16 @@ async def admin_decision(call: CallbackQuery):
         await call.answer("Заказ не найден", show_alert=True)
         return
 
-    if order["status"] in ("accepted", "rejected", "cancelled"):
+    if order["status"] in ("accepted", "rejected", "cancelled", "revoked"):
         await call.answer("Уже решено", show_alert=True)
         try:
             await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
+        return
+
+    if db_is_banned(order["user_id"]):
+        await call.answer("Пользователь забанен", show_alert=True)
         return
 
     if action == "no":
