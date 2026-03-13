@@ -32,7 +32,7 @@ BANNER_PATH = os.path.join(BASE_DIR, os.getenv("BANNER_PATH", "banner.jpg"))
 
 # ================== LINKS ==================
 TG_CHANNEL = "https://t.me/sokxyybc"
-PRIVATE_GROUP_LINK = "https://t.me/+6ahhnSMk7740NmQy"
+PRIVATE_GROUP_LINK = "https://t.me/+wlbajMk9C984NzU6"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
 AGREEMENT_URL = "https://telegra.ph/Soglashenie-03-10-3"
 
