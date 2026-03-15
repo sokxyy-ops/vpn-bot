@@ -1173,7 +1173,7 @@ def kb_after_issue():
         [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
         [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
         [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
-        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="🔒 Приватная группа владельцу", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
     ])
@@ -1201,7 +1201,7 @@ def kb_sub_with_refresh(user_id: int):
         [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
         [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
         [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
-        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="🔒 Приватная группа владельцу", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
         [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
     ])
