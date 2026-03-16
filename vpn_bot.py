@@ -982,24 +982,23 @@ def plan_meta(plan: str):
 # ================== UI TEXT ==================
 def text_menu():
     return (
-        "⚡ *SkyWhy VPN*\n\n"
-        "🛡 Обычный VPN + режим обхода блокировок\n"
-        "♾ Доступ *навсегда*\n"
-        "🔑 Выдача подписки для *Happ* после оплаты\n\n"
-        "👇 Выбери действие ниже"
+        "🌐 *SkyWhy VPN*\n\n"
+        "┏ Быстрое и стабильное подключение\n"
+        "┣ Режим обхода блокировок\n"
+        "┣ Ключ выдаётся после проверки оплаты\n"
+        "┗ Доступ: *навсегда* ♾\n\n"
+        "Выбери нужный раздел ниже 👇"
     )
-
 
 def text_buy_intro():
     std_price = plan_meta("standard")[3]
     fam_price = plan_meta("family")[3]
     return (
-        "🛒 *Покупка подписки*\n\n"
-        f"🟩 *Стандарт* — 1 пользователь • до 3 устройств — *{std_price}₽*\n"
-        f"🟦 *Семейная* — до 8 пользователей • до 3 устройств каждому — *{fam_price}₽*\n\n"
-        "Выбери тариф ниже 👇"
+        "🛍 *Выбор тарифа*\n\n"
+        f"🟩 *Стандарт*\n• 1 пользователь\n• До 3 устройств\n• *{std_price}₽*\n\n"
+        f"🟦 *Семейная*\n• До 8 пользователей\n• До 3 устройств каждому\n• *{fam_price}₽*\n\n"
+        "Нажми на подходящий тариф ниже."
     )
-
 
 def text_subscription_card(from_user, subs: Optional[list]):
     name = (from_user.first_name or "—").strip()
@@ -1007,20 +1006,21 @@ def text_subscription_card(from_user, subs: Optional[list]):
 
     if not subs:
         return (
-            "👤 *Профиль:*\n"
-            f"> Имя: {name}\n"
-            f"> ID: {uid}\n\n"
-            "🔗 *Подписки:*\n"
-            "> Нет активных подписок\n\n"
-            "Нажми *Купить подписку* 👇"
+            "👤 *Мой профиль*\n\n"
+            f"Имя: *{md_escape(name)}*\n"
+            f"ID: `{uid}`\n\n"
+            "📦 *Подписки*\n"
+            "• Активных подписок пока нет\n\n"
+            "Нажми *Купить подписку*, чтобы оформить доступ."
         )
 
     parts = [
-        "👤 *Профиль:*",
-        f"> Имя: {name}",
-        f"> ID: {uid}",
+        "👤 *Мой профиль*",
         "",
-        "🔗 *Ваши подписки:*",
+        f"Имя: *{md_escape(name)}*",
+        f"ID: `{uid}`",
+        "",
+        "📦 *Активные подписки*",
     ]
 
     for idx, sub in enumerate(subs, start=1):
@@ -1030,16 +1030,15 @@ def text_subscription_card(from_user, subs: Optional[list]):
         parts.extend([
             "",
             f"*{idx}. {plan_name}*",
-            f"> Ключ: `{key}`",
-            f"> Срок: ♾ Навсегда",
-            f"> {conditions}",
-            f"> Лимит устройств: {device_limit}",
-            f"> Выдано: {fmt_ts(sub.get('accepted_at'))}",
+            f"• Ключ: `{key}`",
+            "• Срок: *Навсегда* ♾",
+            f"• Условия: {conditions}",
+            f"• Лимит устройств: {device_limit}",
+            f"• Выдано: {fmt_ts(sub.get('accepted_at'))}",
         ])
 
-    parts.extend(["", "👇 Используй кнопки ниже"])
+    parts.extend(["", "Ниже есть кнопки для обновления ключа и быстрого входа в Happ."])
     return "\n".join(parts)
-
 
 def fmt_ts(ts: Optional[int]) -> str:
     if not ts:
@@ -1109,53 +1108,53 @@ def build_admin_user_text(user_id: int) -> str:
 # ================== KEYBOARDS ==================
 def kb_reply_menu(user_id: int):
     active = db_get_active_order(user_id)
-    rows = [[KeyboardButton(text="📋 Меню"), KeyboardButton(text="🧾 Моя подписка")]]
+    rows = [[KeyboardButton(text="🏠 Меню"), KeyboardButton(text="📦 Моя подписка")]]
 
     if active:
         rows.append([KeyboardButton(text="❌ Отменить заказ")])
 
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-
 def kb_main(user_id: int):
     active = db_get_active_order(user_id)
     rows = [
         [InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")],
-        [InlineKeyboardButton(text="🧾 Моя подписка", callback_data="menu:sub")],
+        [InlineKeyboardButton(text="📦 Моя подписка", callback_data="menu:sub")],
     ]
 
     if active:
+        rows.append([InlineKeyboardButton(text="⏳ Активный заказ", callback_data="noop")])
         rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
 
-    rows.append([InlineKeyboardButton(text="📣 Канал", url=TG_CHANNEL)])
+    rows.extend([
+        [InlineKeyboardButton(text="📣 Наш канал", url=TG_CHANNEL)],
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 def kb_buy():
     std_price = plan_meta("standard")[3]
     fam_price = plan_meta("family")[3]
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🟩 Стандарт — {std_price}₽ (1 пользователь • до 3 устройств)", callback_data="buy:standard")],
-        [InlineKeyboardButton(text=f"🟦 Семейная — {fam_price}₽ (до 8 пользователей • до 3 устройств)", callback_data="buy:family")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:main")],
+        [InlineKeyboardButton(text=f"🟩 Стандарт • {std_price}₽", callback_data="buy:standard")],
+        [InlineKeyboardButton(text="1 пользователь • до 3 устройств", callback_data="noop")],
+        [InlineKeyboardButton(text=f"🟦 Семейная • {fam_price}₽", callback_data="buy:family")],
+        [InlineKeyboardButton(text="до 8 пользователей • до 3 устройств", callback_data="noop")],
+        [InlineKeyboardButton(text="⬅️ Назад в меню", callback_data="menu:main")],
     ])
-
-
 
 def kb_agreement(plan: str):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Пользовательское соглашение", url=AGREEMENT_URL)],
-        [InlineKeyboardButton(text="✅ Принять условия", callback_data=f"agree:{plan}")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:buy")],
+        [InlineKeyboardButton(text="📄 Открыть соглашение", url=AGREEMENT_URL)],
+        [InlineKeyboardButton(text="✅ Согласен, продолжить", callback_data=f"agree:{plan}")],
+        [InlineKeyboardButton(text="⬅️ К тарифам", callback_data="menu:buy")],
     ])
 
 def kb_payment(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel:{order_id}")],
         [InlineKeyboardButton(text="🔁 Переслать админу", callback_data=f"resend:{order_id}")],
-        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
+        [InlineKeyboardButton(text="❌ Отменить заказ", callback_data=f"cancel:{order_id}")],
+        [InlineKeyboardButton(text="🏠 В меню", callback_data="menu:main")],
     ])
-
 
 def kb_admin_decision(order_id: int):
     order = db_get_order(order_id)
@@ -1170,14 +1169,13 @@ def kb_admin_decision(order_id: int):
 
 def kb_after_issue():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
-        [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
-        [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
-        [InlineKeyboardButton(text="🔒 Приватная группа владельцу", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="📱 Happ для Android", url=HAPP_ANDROID_URL),
+         InlineKeyboardButton(text="🍎 Happ для iPhone", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="💻 Happ для Windows", url=HAPP_WINDOWS_URL)],
+        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
-        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
+        [InlineKeyboardButton(text="🏠 В меню", callback_data="menu:main")],
     ])
-
 
 def kb_sub_no_sub(user_id: int):
     rows = [[InlineKeyboardButton(text="🛒 Купить подписку", callback_data="menu:buy")]]
@@ -1186,85 +1184,79 @@ def kb_sub_no_sub(user_id: int):
     if active:
         rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
 
-    rows.append([InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")])
+    rows.append([InlineKeyboardButton(text="🏠 В меню", callback_data="menu:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-
 def kb_sub_with_refresh(user_id: int):
-    rows = [[InlineKeyboardButton(text="🔄 Обновить подписку", callback_data="sub:refresh")]]
+    rows = [[InlineKeyboardButton(text="🔄 Обновить ключ", callback_data="sub:refresh")]]
 
     active = db_get_active_order(user_id)
     if active:
         rows.append([InlineKeyboardButton(text="❌ Отменить заказ", callback_data="menu:cancel_order")])
 
     rows.extend([
-        [InlineKeyboardButton(text="📱 Happ (Android)", url=HAPP_ANDROID_URL)],
-        [InlineKeyboardButton(text="🍎 Happ (iOS)", url=HAPP_IOS_URL)],
-        [InlineKeyboardButton(text="💻 Happ (Windows)", url=HAPP_WINDOWS_URL)],
-        [InlineKeyboardButton(text="🔒 Приватная группа владельцу", url=PRIVATE_GROUP_LINK)],
+        [InlineKeyboardButton(text="📱 Android", url=HAPP_ANDROID_URL),
+         InlineKeyboardButton(text="🍎 iPhone", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="💻 Windows", url=HAPP_WINDOWS_URL)],
+        [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
-        [InlineKeyboardButton(text="⬅️ В меню", callback_data="menu:main")],
+        [InlineKeyboardButton(text="🏠 В меню", callback_data="menu:main")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 def kb_admin_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📦 Заказы", callback_data="admin:list"),
-         InlineKeyboardButton(text="🔎 Поиск", callback_data="admin:search")],
+         InlineKeyboardButton(text="🔎 Найти заказ", callback_data="admin:search")],
+        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
+         InlineKeyboardButton(text="⛔ Баны", callback_data="admin:banned:0")],
         [InlineKeyboardButton(text="💰 Прибыль", callback_data="admin:profit"),
          InlineKeyboardButton(text="📢 Рассылка", callback_data="admin:broadcast")],
         [InlineKeyboardButton(text="🏷 Цены", callback_data="admin:prices"),
          InlineKeyboardButton(text="🔑 Ключи", callback_data="admin:keys")],
-        [InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
-         InlineKeyboardButton(text="⛔ Заблокированные", callback_data="admin:banned:0")],
     ])
-
 
 def kb_admin_list(rows):
     keyboard = []
     for oid, uid, uname, plan, amount, created_at in rows[:20]:
         u = f"@{uname}" if uname else str(uid)
+        plan_badge = "🟩" if plan == "standard" else "🟦"
         keyboard.append([InlineKeyboardButton(
-            text=f"🧾 #{oid} • {plan} • {amount}₽ • {u}",
+            text=f"{plan_badge} #{oid} • {amount}₽ • {u}",
             callback_data=f"admin:view:{oid}"
         )])
     keyboard.append([
         InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:list"),
-        InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")
     ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
-
 
 def kb_admin_prices():
     std_price = plan_meta("standard")[3]
     fam_price = plan_meta("family")[3]
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"🟩 Стандарт: {std_price}₽", callback_data="admin:price:set:standard")],
-        [InlineKeyboardButton(text=f"🟦 Семейная: {fam_price}₽", callback_data="admin:price:set:family")],
-        [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
+        [InlineKeyboardButton(text=f"🟩 Стандарт • {std_price}₽", callback_data="admin:price:set:standard")],
+        [InlineKeyboardButton(text=f"🟦 Семейная • {fam_price}₽", callback_data="admin:price:set:family")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")],
     ])
-
 
 def kb_admin_keys():
     s = db_keys_count("standard")
     f = db_keys_count("family")
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"➕ Добавить 🟩 (в базе {s})", callback_data="admin:keys:add:standard")],
-        [InlineKeyboardButton(text=f"➕ Добавить 🟦 (в базе {f})", callback_data="admin:keys:add:family")],
-        [InlineKeyboardButton(text="🧹 Очистить 🟩", callback_data="admin:keys:clear:standard"),
-         InlineKeyboardButton(text="🧹 Очистить 🟦", callback_data="admin:keys:clear:family")],
-        [InlineKeyboardButton(text="⬅️ Админ", callback_data="admin:home")],
+        [InlineKeyboardButton(text=f"➕ Добавить в Стандарт ({s})", callback_data="admin:keys:add:standard")],
+        [InlineKeyboardButton(text=f"➕ Добавить в Семейную ({f})", callback_data="admin:keys:add:family")],
+        [InlineKeyboardButton(text="🧹 Очистить Стандарт", callback_data="admin:keys:clear:standard")],
+        [InlineKeyboardButton(text="🧹 Очистить Семейную", callback_data="admin:keys:clear:family")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:home")],
     ])
-
 
 def kb_confirm_clear(plan: str):
     title = "🟩 Стандарт" if plan == "standard" else "🟦 Семейная"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✅ Да, очистить {title}", callback_data=f"admin:keys:clear_yes:{plan}")],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="admin:keys")],
+        [InlineKeyboardButton(text="⬅️ Не очищать", callback_data="admin:keys")],
     ])
-
 
 def kb_admin_profit():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1513,13 +1505,13 @@ async def cmd_menu(m: Message):
     await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
-@dp.message(F.text == "📋 Меню")
+@dp.message(F.text == "🏠 Меню")
 async def menu_btn(m: Message):
     await send_banner_or_text(m.chat.id, text_menu(), reply_markup=kb_main(m.from_user.id))
     await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
-@dp.message(F.text == "🧾 Моя подписка")
+@dp.message(F.text == "📦 Моя подписка")
 async def mysub_btn(m: Message):
     subs = db_get_accepted_subscriptions(m.from_user.id)
     if not subs:
@@ -1548,7 +1540,7 @@ async def cancel_order_from_reply(m: Message):
     except Exception:
         pass
 
-    await m.answer("✅ Заказ отменён. Можешь оформить новый через меню.", reply_markup=kb_main(m.from_user.id))
+    await m.answer("✅ Заказ отменён. Можешь сразу оформить новый через меню.", reply_markup=kb_main(m.from_user.id))
     await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
@@ -1615,7 +1607,7 @@ async def menu_router(call: CallbackQuery):
 
             await bot.send_message(
                 call.from_user.id,
-                "✅ Заказ отменён. Можешь оформить новый через меню.",
+                "✅ Заказ отменён. Можешь сразу оформить новый через меню.",
                 reply_markup=kb_main(call.from_user.id)
             )
             await refresh_reply_menu(call.message.chat.id, call.from_user.id)
@@ -1728,7 +1720,7 @@ async def cancel_order(call: CallbackQuery):
             except Exception:
                 pass
 
-        await bot.send_message(user_id, "✅ Заказ отменён. Можешь оформить новый через меню.", reply_markup=kb_main(user_id))
+        await bot.send_message(user_id, "✅ Заказ отменён. Можешь сразу оформить новый через меню.", reply_markup=kb_main(user_id))
         await refresh_reply_menu(call.message.chat.id, call.from_user.id)
     finally:
         try:
@@ -1788,7 +1780,7 @@ async def receipt(m: Message):
 
     active = db_get_active_order(user_id)
     if not active:
-        await m.answer("⚠️ Нет активного заказа. Открой /start и выбери тариф.")
+        await m.answer("⚠️ Сейчас нет активного заказа. Нажми /start и выбери тариф.")
         await refresh_reply_menu(m.chat.id, m.from_user.id)
         return
 
@@ -1815,7 +1807,7 @@ async def receipt(m: Message):
     except Exception as e:
         print("COPY TO ADMIN ERROR:", repr(e))
 
-    await m.answer("✅ Чек отправлен админу. Жди подтверждения ⏳")
+    await m.answer("✅ Чек отправлен. Как только админ подтвердит оплату, бот пришлёт ключ ⏳")
     await refresh_reply_menu(m.chat.id, m.from_user.id)
 
 
@@ -1824,21 +1816,20 @@ async def send_key_to_user(user_id: int, plan: str, key: str):
     plan_name, conditions, _device_limit, _amount = plan_meta(plan)
     await bot.send_message(
         user_id,
-        "✅ *Оплата подтверждена!*\n\n"
-        f"📦 Тариф: *{plan_name}* • ♾ *Навсегда*\n"
+        "🎉 *Оплата подтверждена!*\n\n"
+        f"📦 Тариф: *{plan_name}*\n"
+        "♾ Срок действия: *Навсегда*\n"
         f"{conditions}\n\n"
-        "🔑 *Твой ключ:*\n"
-        f"> `{key}`\n\n"
-        "📲 *Как подключиться (Happ):*\n"
-        "1) Скачай Happ (кнопки ниже)\n"
-        "2) Открой приложение\n"
-        "3) Нажми «Добавить / Import / Подписка»\n"
-        "4) Вставь ключ\n\n"
-        "Нажми кнопки ниже 👇",
+        "🔑 *Твой ключ доступа:*\n"
+        f"`{key}`\n\n"
+        "📲 *Как подключить в Happ:*\n"
+        "1. Установи приложение Happ\n"
+        "2. Открой его\n"
+        "3. Нажми Add / Import / Подписка\n"
+        "4. Вставь ключ и сохрани\n\n"
+        "Все нужные ссылки уже ниже 👇",
         reply_markup=kb_after_issue()
     )
-
-
 # ================== SUBSCRIPTION REFRESH ==================
 @dp.callback_query(F.data == "sub:refresh")
 async def refresh_subscription(call: CallbackQuery):
@@ -1903,7 +1894,7 @@ async def admin_list(call: CallbackQuery):
         await call.message.answer("✅ Нет заказов на проверке.", reply_markup=kb_admin_menu())
         await call.answer()
         return
-    await call.message.answer("📦 *Заказы на проверке:*", reply_markup=kb_admin_list(rows))
+    PLACEHOLDER
     await call.answer()
 
 
@@ -2139,7 +2130,7 @@ async def admin_keys_clear_yes(call: CallbackQuery):
         return
 
     db_keys_clear(plan)
-    await call.message.answer("✅ Ключи очищены.", reply_markup=kb_admin_keys())
+    await call.message.answer("✅ Все ключи этого тарифа удалены из базы.", reply_markup=kb_admin_keys())
     await call.answer()
 
 
@@ -2467,7 +2458,7 @@ async def admin_price_input(m: Message, state: FSMContext):
         db_settings_set("price_family", str(price))
 
     await state.clear()
-    await m.answer("✅ Цена обновлена.", reply_markup=kb_admin_prices())
+    await m.answer("✅ Цена успешно обновлена.", reply_markup=kb_admin_prices())
 
 
 @dp.message(AdminStates.keys_wait)
@@ -2526,7 +2517,7 @@ async def admin_broadcast_send(m: Message, state: FSMContext):
         return
 
     ok, bad = 0, 0
-    await m.answer(f"📢 Начинаю рассылку по *{len(user_ids)}* пользователям…")
+    await m.answer(f"📢 Запускаю рассылку по *{len(user_ids)}* пользователям…")
 
     for uid in user_ids:
         try:
