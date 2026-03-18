@@ -999,6 +999,10 @@ def text_buy_intro():
         "Нажми на подходящий тариф ниже."
     )
 
+def pretty_plan_name(plan: str) -> str:
+    return "🟩 Стандартная" if plan == "standard" else "🟦 Семейная"
+
+
 def text_subscription_card(from_user, subs: Optional[list]):
     name = (from_user.first_name or "—").strip()
     uid = from_user.id
@@ -1024,19 +1028,23 @@ def text_subscription_card(from_user, subs: Optional[list]):
 
     for idx, sub in enumerate(subs, start=1):
         plan_name, conditions, device_limit, _amount = plan_meta(sub["plan"])
-        key = sub.get("issued_key") or "—"
 
         parts.extend([
             "",
-            f"*{idx}. {plan_name}*",
-            f"• Ключ: `{key}`",
+            f"*{idx}. {pretty_plan_name(sub['plan'])}*",
+            f"• Тариф в системе: {plan_name}",
+            "• Ключ: *скрыт для удобства*",
             "• Срок: *Навсегда* ♾",
             f"• Условия: {conditions}",
             f"• Лимит устройств: {device_limit}",
             f"• Выдано: {fmt_ts(sub.get('accepted_at'))}",
         ])
 
-    parts.extend(["", "Ниже есть кнопки для обновления ключа и быстрого входа в Happ."])
+    parts.extend([
+        "",
+        "Нажми кнопку нужного тарифа ниже. Бот пришлёт ключ отдельным сообщением.",
+        "На телефоне можно нажать на код или зажать его, чтобы скопировать.",
+    ])
     return "\n".join(parts)
 
 def fmt_ts(ts: Optional[int]) -> str:
@@ -1166,15 +1174,21 @@ def kb_admin_decision(order_id: int):
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def kb_after_issue():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📱 Happ для Android", url=HAPP_ANDROID_URL),
-         InlineKeyboardButton(text="🍎 Happ для iPhone", url=HAPP_IOS_URL)],
-        [InlineKeyboardButton(text="💻 Happ для Windows", url=HAPP_WINDOWS_URL)],
+def kb_after_issue(plan: Optional[str] = None):
+    rows = []
+
+    if plan in ("standard", "family"):
+        rows.append([InlineKeyboardButton(text=f"📋 {pretty_plan_name(plan)}", callback_data=f"sub:key:{plan}")])
+
+    rows.extend([
+        [InlineKeyboardButton(text="📱 Android", url=HAPP_ANDROID_URL),
+         InlineKeyboardButton(text="🍎 iPhone", url=HAPP_IOS_URL)],
+        [InlineKeyboardButton(text="💻 Windows", url=HAPP_WINDOWS_URL)],
         [InlineKeyboardButton(text="🔒 Приватная группа", url=PRIVATE_GROUP_LINK)],
         [InlineKeyboardButton(text="⭐ Оставить отзыв", url=REVIEW_LINK)],
         [InlineKeyboardButton(text="🏠 В меню", callback_data="menu:main")],
     ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def kb_require_subscription():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -1193,7 +1207,21 @@ def kb_sub_no_sub(user_id: int):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def kb_sub_with_refresh(user_id: int):
-    rows = [[InlineKeyboardButton(text="🔄 Обновить ключ", callback_data="sub:refresh")]]
+    rows = []
+    subs = db_get_accepted_subscriptions(user_id)
+
+    plan_buttons = []
+    for sub in subs:
+        plan = sub.get("plan")
+        if plan in ("standard", "family"):
+            plan_buttons.append(
+                InlineKeyboardButton(text=f"📋 {pretty_plan_name(plan)}", callback_data=f"sub:key:{plan}")
+            )
+
+    if plan_buttons:
+        rows.append(plan_buttons[:2])
+
+    rows.append([InlineKeyboardButton(text="🔄 Обновить ключ", callback_data="sub:refresh")])
 
     active = db_get_active_order(user_id)
     if active:
@@ -1890,23 +1918,57 @@ async def receipt(m: Message):
 
 # ================== ISSUE KEY ==================
 async def send_key_to_user(user_id: int, plan: str, key: str):
-    plan_name, conditions, _device_limit, _amount = plan_meta(plan)
+    _plan_name, conditions, _device_limit, _amount = plan_meta(plan)
     await bot.send_message(
         user_id,
         "🎉 *Оплата подтверждена!*\n\n"
-        f"📦 Тариф: *{plan_name}*\n"
+        f"📦 Тариф: *{pretty_plan_name(plan)}*\n"
         "♾ Срок действия: *Навсегда*\n"
         f"{conditions}\n\n"
-        "🔑 *Твой ключ доступа:*\n"
-        f"`{key}`\n\n"
+        "🔑 *Ключ не показываю длинной строкой в сообщении, чтобы было аккуратнее.*\n"
+        "Нажми кнопку с тарифом ниже. Бот пришлёт ключ отдельным сообщением.\n"
+        "На телефоне можно нажать на код или зажать его, чтобы скопировать.\n\n"
         "📲 *Как подключить в Happ:*\n"
         "1. Установи приложение Happ\n"
         "2. Открой его\n"
         "3. Нажми Add / Import / Подписка\n"
         "4. Вставь ключ и сохрани\n\n"
         "Все нужные ссылки уже ниже 👇",
-        reply_markup=kb_after_issue()
+        reply_markup=kb_after_issue(plan)
     )
+
+
+@dp.callback_query(F.data.startswith("sub:key:"))
+async def show_subscription_key(call: CallbackQuery):
+    try:
+        plan = call.data.split(":", 2)[2]
+        if plan not in ("standard", "family"):
+            await call.answer("Неизвестный тариф", show_alert=True)
+            return
+
+        subs = db_get_accepted_subscriptions(call.from_user.id)
+        selected_sub = next((sub for sub in subs if sub.get("plan") == plan), None)
+        if not selected_sub:
+            await call.answer("У тебя нет такого тарифа", show_alert=True)
+            return
+
+        key = selected_sub.get("issued_key") or ""
+        if not key:
+            await call.answer("Ключ пока не найден", show_alert=True)
+            return
+
+        await call.message.answer(
+            f"📋 *{pretty_plan_name(plan)}*\n\n"
+            f"💳 Системное название: *{plan_meta(plan)[0]}*\n\n"
+            "Нажми на ключ ниже или зажми его, чтобы скопировать:\n\n"
+            f"`{key}`"
+        )
+    finally:
+        try:
+            await call.answer()
+        except Exception:
+            pass
+
 # ================== SUBSCRIPTION REFRESH ==================
 @dp.callback_query(F.data == "sub:refresh")
 async def refresh_subscription(call: CallbackQuery):
