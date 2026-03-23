@@ -2845,3 +2845,9 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    @dp.message(Command("etest"))
+async def etest(m: Message):
+    await m.answer(
+        '<tg-emoji emoji-id="5359596642506925824">🌐</tg-emoji> TEST',
+        parse_mode="HTML"
+    )
