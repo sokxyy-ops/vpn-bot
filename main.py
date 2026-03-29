@@ -55,7 +55,7 @@ PRIVATE_GROUP_LINK = "https://t.me/+wlbajMk9C984NzU6"
 REVIEW_LINK = "https://t.me/sokxyybc/23"
 AGREEMENT_URL = "https://telegra.ph/Polzovatelskoe-soglashenie-08-15-10"
 PRIVACY_URL = "https://telegra.ph/Politika-konfidencialnosti-08-15-17"
-SUPPORT_EMAIL = "hurtdeathz@gmail.com"
+SUPPORT_EMAIL = "support@gmail.com"
 
 HAPP_ANDROID_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
 HAPP_IOS_URL = "https://apps.apple.com/app/happ-proxy-utility/id6504287215"
@@ -104,14 +104,14 @@ def html_plan_conditions(plan: str) -> str:
 
 def payment_text_html() -> str:
     return (
-        "💳 <b>Оплата через ЮKassa</b>\n\n"
-        "Нажми кнопку <b>Оплатить</b> ниже. После успешной оплаты бот автоматически выдаст ключ 🔑"
+        "💳 <b>Оплата через кассу</b>\n\n"
+        "Нажми кнопку <b>Оплатить</b> ниже. После успешной оплаты бот автоматически выдаст ключ"
     )
 
 # ================== PAYMENT ==================
 PAYMENT_TEXT = (
-    "💳 *Оплата через ЮKassa*\n\n"
-    "Нажми кнопку *Оплатить* ниже. После успешной оплаты бот автоматически выдаст ключ 🔑"
+    "💳 *Оплата через кассу*\n\n"
+    "Нажми кнопку *Оплатить* ниже. После успешной оплаты бот автоматически выдаст ключ"
 )
 
 BOT_USERNAME = ""
